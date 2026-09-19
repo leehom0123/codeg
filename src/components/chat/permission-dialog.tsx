@@ -128,7 +128,9 @@ export function PermissionDialog({
                 0.63–0.72 `_meta.claudeCode.title`, else `_meta.permission.title`
                 — codex ≥1.7.0 and claude ≥0.73.0, whose permission tool calls
                 carry no `claudeCode` block at all) over the raw title (the
-                shell command, which the command block below already shows). */}
+                shell command, which the command block below already shows).
+                `parsePermissionToolCall` also drops a description that IS that
+                command, which is what claude-agent-acp ≥0.79.0 puts there. */}
             <span className="truncate">
               {parsed.description ?? parsed.title}
             </span>
@@ -341,13 +343,20 @@ export function PermissionDialog({
         )}
       </div>
 
+      {/* `_meta.permission.defaultToNo` (claude-agent-acp ≥0.77.0) marks an ask
+          that "must not be approvable by a stray keystroke". codeg pre-selects
+          nothing and binds no key, and the adapter already sends the reject
+          options first — so all that is left is the emphasis, which today puts
+          the single filled button on "Allow". Inverting it keeps every option
+          one click away while making the decline the one the eye lands on. */}
       <div className="mt-3 flex flex-wrap gap-2">
         {options.map((opt) => {
           const isReject = opt.kind.startsWith("reject")
+          const emphasized = parsed.defaultToNo ? isReject : !isReject
           return (
             <Button
               key={opt.option_id}
-              variant={isReject ? "outline" : "default"}
+              variant={emphasized ? "default" : "outline"}
               className="h-auto min-h-9 whitespace-normal break-words text-left"
               onClick={() => onRespond(permission.request_id, opt.option_id)}
             >

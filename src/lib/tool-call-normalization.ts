@@ -147,6 +147,12 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   lsp_goto_definition: "lsp",
   lsp_servers: "lsp",
   execute: "bash",
+  // Claude Code's PowerShell tool: same `{command, description, …}` envelope
+  // as Bash, so it belongs on the Terminal card — and only the command-card
+  // branch reads `description` (claude-agent-acp lifts `_meta.claudeCode.title`
+  // for Bash alone, so the input field is the sole source here).
+  powershell: "bash",
+  pwsh: "bash",
   search: "grep",
   fetch: "webfetch",
   think: "task",
@@ -561,6 +567,19 @@ export function normalizeToolName(toolName: string): string {
   // catches the unprefixed form, so collapse every separator here. Note the
   // freeform matcher below intentionally does NOT catch the underscore form.
   if (/[^a-z0-9]ask_user_question$/.test(canonical)) return "question"
+
+  // Multi-agent companion tools exposed under an implementation namespace.
+  // codex 0.147's native team-of-agents reaches the transcript as
+  // `multi_agent_v1__spawn_agent` / `…__wait_agent` / `…__close_agent` — the
+  // bare `spawn_agent` aliases above never see it, and the freeform `\bagent\b`
+  // matcher CANNOT (no word boundary inside the underscore form), so the spawn
+  // calls used to fall through to the generic tool shell: no Agent capsule in
+  // the message area, no sub-agent rows in the aux panel. Collapse the family
+  // on its op suffix, the same way the delegation tools above collapse on
+  // theirs. A codex thread id never spells like this, so no false positive.
+  if (/[^a-z0-9]spawn_agent$/.test(canonical)) return "agent"
+  if (/[^a-z0-9]wait_agent$/.test(canonical)) return "task"
+  if (/[^a-z0-9]close_agent$/.test(canonical)) return "task"
 
   // codeg-mcp live-feedback poll. Same host-prefix story as the delegation tools
   // (`mcp__<server>__check_user_feedback`, `<server>/check_user_feedback`, …) —

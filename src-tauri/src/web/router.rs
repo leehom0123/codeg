@@ -160,6 +160,10 @@ pub fn build_router(
             post(handlers::conversations::create_chat_dir),
         )
         .route(
+            "/open_native_subagent_session",
+            post(handlers::conversations::open_native_subagent_session),
+        )
+        .route(
             "/update_conversation_status",
             post(handlers::conversations::update_conversation_status),
         )

@@ -79,6 +79,9 @@ interface ChatInputProps {
   /** Which channel `onSteer` rides (`useSessionFeedback().channel`); picks
    *  the composer's honest copy. See `MessageInput`. */
   steerChannel?: "native" | "pull"
+  /** Per-row lane resolver for the queue's click-to-insert (see
+   *  `MessageQueueDisplayProps.steerChannelFor`); threaded straight through. */
+  queueSteerChannelFor?: (item: QueuedMessage) => "native" | "pull"
   onAddFeedback?: () => void
   feedbackAddDisabled?: boolean
   /**
@@ -138,6 +141,7 @@ export const ChatInput = memo(function ChatInput({
   onCancelQueueEdit,
   onSteer,
   steerChannel,
+  queueSteerChannelFor,
   onAddFeedback,
   feedbackAddDisabled,
   allowOfflineCompose = false,
@@ -197,7 +201,7 @@ export const ChatInput = memo(function ChatInput({
             onDelete={onQueueDelete}
             editingItemId={editingItemId ?? null}
             onSteerItem={onQueueSteer}
-            steerChannel={steerChannel}
+            steerChannelFor={queueSteerChannelFor}
           />
         )}
       <MessageInput

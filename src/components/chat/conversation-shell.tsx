@@ -142,6 +142,10 @@ interface ConversationShellProps {
   /** Which channel `onSteer` rides (picks the composer's honest copy);
    *  threaded straight through. See `MessageInput`. */
   steerChannel?: "native" | "pull"
+  /** Per-row lane resolver for the queue's click-to-insert (see
+   *  `MessageQueueDisplayProps.steerChannelFor`); threaded straight through
+   *  to `ChatInput`. */
+  queueSteerChannelFor?: (item: QueuedMessage) => "native" | "pull"
   /** Optional banner pinned to the top of the panel, above the message area
    *  (e.g. the "restart to apply" config-stale banner). Renders nothing when
    *  omitted. */
@@ -212,6 +216,7 @@ export function ConversationShell({
   onCancelQueueEdit,
   onSteer,
   steerChannel,
+  queueSteerChannelFor,
   topBanner,
   injectContent,
   onInjectConsumed,
@@ -386,6 +391,7 @@ export function ConversationShell({
               onCancelQueueEdit={onCancelQueueEdit}
               onSteer={onSteer}
               steerChannel={steerChannel}
+              queueSteerChannelFor={queueSteerChannelFor}
               onAddFeedback={onAddFeedback}
               feedbackAddDisabled={feedbackAddDisabled}
               injectContent={injectContent}

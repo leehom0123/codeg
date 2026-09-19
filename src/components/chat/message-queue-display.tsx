@@ -22,10 +22,12 @@ interface MessageQueueDisplayProps {
    * the turn-end race). Resolves once delivery is settled.
    */
   onSteerItem?: (id: string) => Promise<void> | void
-  /** Which channel {@link onSteerItem} rides; picks the honest icon/copy,
+  /** Which channel THIS row's insert rides; picks the honest icon/copy,
    *  mirroring the composer's split-button (`Zap` = instant insert,
-   *  `Clock` = note the agent reads on its next check). */
-  steerChannel?: "native" | "pull"
+   *  `Clock` = note the agent reads on its next check). A RESOLVER, not one
+   *  constant: the host may route plain-text rows to the pull lane while
+   *  attachments must stay on the native wire, so the copy has to be per row. */
+  steerChannelFor?: (item: QueuedMessage) => "native" | "pull"
 }
 
 interface QueueItemProps {
@@ -149,7 +151,7 @@ export function MessageQueueDisplay({
   onDelete,
   editingItemId,
   onSteerItem,
-  steerChannel = "pull",
+  steerChannelFor = () => "pull",
 }: MessageQueueDisplayProps) {
   // The id whose insert is in flight. A per-row `steering` would let a
   // concurrent click on another row race the same channel; one shared id
@@ -194,7 +196,7 @@ export function MessageQueueDisplay({
             onEdit={onEdit}
             onDelete={onDelete}
             onSteerItem={onSteerItem}
-            steerChannel={steerChannel}
+            steerChannel={steerChannelFor(item)}
             steering={steeringId !== null}
             onSteerStart={handleSteerStart}
           />

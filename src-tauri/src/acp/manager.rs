@@ -2970,6 +2970,20 @@ impl ConnectionManager {
         }
     }
 
+    /// Append a live-feedback note to a connection's session and broadcast it,
+    /// preferring the native push lane where the session has one. Full contract
+    /// in [`Self::submit_feedback_prefer_pull`] (this is it with
+    /// `prefer_pull = false`).
+    pub async fn submit_feedback(
+        &self,
+        conn_id: &str,
+        text: String,
+        blocks: Option<Vec<PromptInputBlock>>,
+    ) -> Result<FeedbackItem, AcpError> {
+        self.submit_feedback_prefer_pull(conn_id, text, blocks, false)
+            .await
+    }
+
     /// Append a live-feedback note to a connection's session and broadcast it.
     ///
     /// Validation: the text is trimmed and rejected when empty
@@ -2989,11 +3003,26 @@ impl ConnectionManager {
     /// image attachments) to deliver on the native wire instead of the bare
     /// `text` — `text` then serves as the recorded note. Only the native
     /// channel can carry blocks; see the pull-path gate below.
-    pub async fn submit_feedback(
+    ///
+    /// Pull-lane-preferred [`Self::submit_feedback`].
+    ///
+    /// `prefer_pull` reroutes a native session's note onto the
+    /// `check_user_feedback` pull lane instead of the `_session/steering` push.
+    /// The queued-row insert asks for it: the native wire pre-empts the running
+    /// generation (claude-agent-acp injects at SDK priority `now`, aborting the
+    /// in-flight cycle), while a pull note waits for the agent's next check —
+    /// the queueing a CLI does when the user types mid-turn. Honored only when
+    /// it can actually be honored: the session must HAVE the tool and the
+    /// payload must be plain text (the pull lane delivers `text` alone — a
+    /// block-carrying draft stays on the native wire rather than silently
+    /// dropping its attachments). Otherwise the call behaves exactly like
+    /// [`Self::submit_feedback`].
+    pub async fn submit_feedback_prefer_pull(
         &self,
         conn_id: &str,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
+        prefer_pull: bool,
     ) -> Result<FeedbackItem, AcpError> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -3033,7 +3062,11 @@ impl ConnectionManager {
             return Err(AcpError::FeedbackDisabled);
         }
 
-        if native {
+        // The pull preference reroutes ONLY when it can be honored: without the
+        // tool the note would sit on a lane no agent can ever read, and blocks
+        // ride only the native wire (see the pull-path gate below). Either way
+        // the caller's content still delivers — just on the interrupting lane.
+        if native && !(prefer_pull && tool_available && blocks.is_none()) {
             return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
                 .await;
         }
@@ -8502,6 +8535,103 @@ mod tests {
             mgr.read_pending_feedback("c1").await.is_empty(),
             "a check_user_feedback pull must never re-deliver a natively-injected note"
         );
+    }
+
+    // --- prefer_pull (queued-row inserts ride the non-interrupting lane) --
+
+    #[tokio::test]
+    async fn prefer_pull_on_native_session_delivers_as_pending_note() {
+        // The queued-row insert's core case: on a session with BOTH lanes,
+        // `prefer_pull` records the note `Pending` for the tool to read at the
+        // agent's next check and NEVER touches the native wire (no Steer
+        // command enqueued) — the running generation is left alone.
+        let mgr = ConnectionManager::new();
+        let mut rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        set_feedback_tool_available(&mgr, "c1").await;
+
+        let item = mgr
+            .submit_feedback_prefer_pull("c1", "  also cover cancel  ".into(), None, true)
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Pending);
+        assert_eq!(item.text, "also cover cancel");
+        assert!(
+            matches!(rx.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Empty)),
+            "the pull preference must not enqueue a native Steer"
+        );
+        let pulled = mgr.read_pending_feedback("c1").await;
+        assert_eq!(pulled.len(), 1, "the note is queued for the tool to read");
+        assert_eq!(pulled[0].text, "also cover cancel");
+        // The preference must not latch: the next plain submit still rides native.
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+        let item = mgr.submit_feedback("c1", "next one".into(), None).await.unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        fake_loop.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prefer_pull_falls_back_to_native_without_the_tool() {
+        // The preference is honored only when it can be: a native session with
+        // no pull tool delivers natively rather than stranding the note on a
+        // lane no agent can read.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        // No set_feedback_tool_available — the tool is absent.
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let item = mgr
+            .submit_feedback_prefer_pull("c1", "deliver anyway".into(), None, true)
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        assert_eq!(
+            fake_loop.await.unwrap(),
+            vec![PromptInputBlock::Text {
+                text: "deliver anyway".into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn prefer_pull_with_blocks_stays_on_the_native_wire() {
+        // A block-carrying draft cannot ride the pull lane (it delivers plain
+        // text); with the tool present the native lane carries it in full
+        // rather than dropping the attachment.
+        let mgr = ConnectionManager::new();
+        let rx = mgr
+            .insert_test_connection_live("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mark_native_steering_ready(&mgr, "c1").await;
+        set_feedback_tool_available(&mgr, "c1").await;
+        let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
+
+        let draft = vec![
+            PromptInputBlock::Text {
+                text: "match this mock".into(),
+            },
+            PromptInputBlock::Image {
+                data: "aGk=".into(),
+                mime_type: "image/png".into(),
+                uri: None,
+            },
+        ];
+        let item = mgr
+            .submit_feedback_prefer_pull(
+                "c1",
+                "match this mock".into(),
+                Some(draft.clone()),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(item.status, FeedbackStatus::Delivered);
+        assert_eq!(fake_loop.await.unwrap(), draft);
     }
 
     #[tokio::test]

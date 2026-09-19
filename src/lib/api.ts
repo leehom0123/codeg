@@ -5107,15 +5107,23 @@ export async function setFeedbackSettings(
  * path (same `NoActiveTurn` fallback) so an attachment is never silently
  * dropped. Uploaded payloads are stripped to their `file://` markers in every
  * HTTP-body mode, exactly like `acpPrompt`; the backend re-hydrates them.
+ *
+ * `preferPull` (optional, default false) asks the backend to deliver on the
+ * non-interrupting `check_user_feedback` pull lane even when this session has
+ * the native push: the native wire pre-empts the running generation, while a
+ * pull note waits for the agent's next check. Honored only when the session
+ * actually has the tool AND `blocks` is absent (the pull lane is plain text).
  */
 export async function submitSessionFeedback(
   connectionId: string,
   text: string,
-  blocks?: PromptInputBlock[] | null
+  blocks?: PromptInputBlock[] | null,
+  preferPull?: boolean
 ): Promise<FeedbackItem> {
   return getTransport().call("submit_session_feedback", {
     connectionId,
     text,
+    preferPull: preferPull ?? false,
     blocks:
       blocks && blocks.length > 0
         ? stripUploadedImagePayloads(

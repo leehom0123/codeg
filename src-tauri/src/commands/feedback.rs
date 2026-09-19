@@ -133,6 +133,9 @@ pub async fn set_feedback_settings(
 /// image attachments; `text` stays the recorded/display form. Only the native
 /// `_session/steering` channel can deliver blocks — the manager rejects them
 /// on the pull path so an attachment is never silently dropped.
+/// `prefer_pull` (optional, default false) asks for the non-interrupting pull
+/// lane on a native-push session — the queued-row insert uses it so the note
+/// waits for the agent's next check instead of pre-empting the generation.
 ///
 /// The gate lives in `ConnectionManager::submit_feedback`, keyed on the
 /// connection's actual `check_user_feedback` capability (not the possibly
@@ -145,9 +148,12 @@ pub async fn submit_session_feedback(
     connection_id: String,
     text: String,
     blocks: Option<Vec<crate::acp::types::PromptInputBlock>>,
+    prefer_pull: Option<bool>,
     manager: tauri::State<'_, crate::acp::manager::ConnectionManager>,
 ) -> Result<crate::acp::feedback::FeedbackItem, crate::acp::error::AcpError> {
-    manager.submit_feedback(&connection_id, text, blocks).await
+    manager
+        .submit_feedback_prefer_pull(&connection_id, text, blocks, prefer_pull.unwrap_or(false))
+        .await
 }
 
 #[cfg(test)]

@@ -57,6 +57,12 @@ pub struct SubmitSessionFeedbackParams {
     /// like `/acp_prompt`, and are re-hydrated server-side.
     #[serde(default)]
     pub blocks: Option<Vec<crate::acp::types::PromptInputBlock>>,
+    /// Deliver on the non-interrupting `check_user_feedback` pull lane even on
+    /// a native-push session (the queued-row insert). Honored only when the
+    /// session has the tool and `blocks` is absent — see
+    /// `ConnectionManager::submit_feedback_prefer_pull`.
+    #[serde(default)]
+    pub prefer_pull: bool,
 }
 
 pub async fn submit_session_feedback(
@@ -67,7 +73,12 @@ pub async fn submit_session_feedback(
     // in `submit_feedback`; recoverable rejections map to 4xx below.
     let item = state
         .connection_manager
-        .submit_feedback(&params.connection_id, params.text, params.blocks)
+        .submit_feedback_prefer_pull(
+            &params.connection_id,
+            params.text,
+            params.blocks,
+            params.prefer_pull,
+        )
         .await
         .map_err(|e| {
             let message = e.to_string();

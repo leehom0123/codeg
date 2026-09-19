@@ -39,6 +39,11 @@ function itemWithAttachment(id: string, text: string): QueuedMessage {
   }
 }
 
+const constLane =
+  (lane: "native" | "pull") =>
+  (_item: QueuedMessage): "native" | "pull" =>
+    lane
+
 function renderDisplay(
   props: Partial<React.ComponentProps<typeof MessageQueueDisplay>> = {}
 ) {
@@ -67,7 +72,7 @@ describe("MessageQueueDisplay click-to-insert", () => {
 
   it("inserts the row the button belongs to, with the native promise", async () => {
     const onSteerItem = vi.fn(async () => {})
-    renderDisplay({ onSteerItem, steerChannel: "native" })
+    renderDisplay({ onSteerItem, steerChannelFor: constLane("native") })
 
     const buttons = screen.getAllByTitle(TQ.steerItemNow)
     expect(buttons).toHaveLength(2)
@@ -78,13 +83,31 @@ describe("MessageQueueDisplay click-to-insert", () => {
 
   it("keys the copy to the pull channel (waiting note, not an insert)", async () => {
     const onSteerItem = vi.fn(async () => {})
-    renderDisplay({ onSteerItem, steerChannel: "pull" })
+    renderDisplay({ onSteerItem, steerChannelFor: constLane("pull") })
 
-    // The insert label must not appear on a pull session — it would promise
-    // an instant injection the channel can't deliver.
+    // The insert label must not appear on a pull row — it would promise an
+    // instant injection the channel can't deliver.
     expect(screen.queryByTitle(TQ.steerItemNow)).toBeNull()
     await userEvent.click(screen.getAllByTitle(TQ.steerItemAsNote)[0])
     expect(onSteerItem).toHaveBeenCalledWith("q1")
+  })
+
+  it("asks the resolver PER row so a block-carrying row keeps the Zap", () => {
+    // The host routes plain-text rows to the non-interrupting pull lane while
+    // attachments must ride the native wire — the display must reflect the
+    // per-item answer, not one constant.
+    renderDisplay({
+      onSteerItem: vi.fn(async () => {}),
+      queue: [
+        item("q1", "plain note"),
+        itemWithAttachment("q2", "look at this"),
+      ],
+      steerChannelFor: (i) =>
+        i.draft.blocks.some((b) => b.type !== "text") ? "native" : "pull",
+    })
+
+    expect(screen.getAllByTitle(TQ.steerItemAsNote)).toHaveLength(1)
+    expect(screen.getAllByTitle(TQ.steerItemNow)).toHaveLength(1)
   })
 
   it("disables every row while an insert is in flight (single-flight)", async () => {
@@ -95,7 +118,7 @@ describe("MessageQueueDisplay click-to-insert", () => {
           release = resolve
         })
     )
-    renderDisplay({ onSteerItem, steerChannel: "native" })
+    renderDisplay({ onSteerItem, steerChannelFor: constLane("native") })
 
     const buttons = screen.getAllByTitle(TQ.steerItemNow) as HTMLButtonElement[]
     await userEvent.click(buttons[0])
@@ -117,7 +140,7 @@ describe("MessageQueueDisplay click-to-insert", () => {
     renderDisplay({
       queue: [item("q1", "use pnpm"), itemWithAttachment("q2", "look at this")],
       onSteerItem: vi.fn(async () => {}),
-      steerChannel: "pull",
+      steerChannelFor: constLane("pull"),
     })
     expect(screen.getAllByTitle(TQ.steerItemAsNote)).toHaveLength(1)
   })
@@ -126,7 +149,7 @@ describe("MessageQueueDisplay click-to-insert", () => {
     renderDisplay({
       queue: [item("q1", "use pnpm"), itemWithAttachment("q2", "look at this")],
       onSteerItem: vi.fn(async () => {}),
-      steerChannel: "native",
+      steerChannelFor: constLane("native"),
     })
     expect(screen.getAllByTitle(TQ.steerItemNow)).toHaveLength(2)
   })
@@ -137,7 +160,7 @@ describe("MessageQueueDisplay click-to-insert", () => {
     // was headed for.
     renderDisplay({
       onSteerItem: vi.fn(async () => {}),
-      steerChannel: "native",
+      steerChannelFor: constLane("native"),
       editingItemId: "q1",
     })
     expect(screen.getAllByTitle(TQ.steerItemNow)).toHaveLength(1)

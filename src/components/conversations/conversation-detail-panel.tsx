@@ -107,6 +107,7 @@ import { useShallow } from "zustand/react/shallow"
 import { useConversationDetail } from "@/hooks/use-conversation-detail"
 import {
   buildSteerPayload,
+  draftRidesBlocks,
   extractUserImagesFromDraft,
   getPromptDraftDisplayText,
 } from "@/lib/prompt-draft"
@@ -2116,8 +2117,27 @@ const ConversationTabView = memo(function ConversationTabView({
     [feedbackSteer]
   )
 
+  // Which lane a queued row's click-to-insert should ride. Plain-text rows
+  // ASK for the pull lane (the backend's `prefer_pull` flag) when the session
+  // has the tool: the note waits for the agent's next check instead of
+  // pre-empting the running generation — the native push delivers at priority
+  // "now", which ABORTS the in-flight cycle (adapter-side; the wire exposes no
+  // host priority knob). Attachment rows can't ride the pull lane (it delivers
+  // text only), so they follow the session channel like the composer does; a
+  // session without the tool can't honor the preference either. THE SAME
+  // resolver drives the row's icon (Zap vs Clock), so the button never
+  // promises a lane the click won't use.
+  const queueRowLane = useCallback(
+    (item: QueuedMessage): "native" | "pull" =>
+      !draftRidesBlocks(item.draft) && feedback.pullAvailable
+        ? "pull"
+        : feedback.channel,
+    [feedback.channel, feedback.pullAvailable]
+  )
+
   // Click-to-insert for a queued row: send THAT item into the running turn
-  // over the same live-feedback channel the composer's mid-turn dropdown uses.
+  // over the lane chosen above — the pull lane when the row asked for it,
+  // otherwise the same channel the composer's mid-turn dropdown uses.
   // The block/text encoding is the shared `buildSteerPayload` — one call site,
   // no policy here beyond the row's own lifecycle: success removes the row;
   // the turn-end race leaves it queued so the auto-flush sends it with the
@@ -2133,11 +2153,19 @@ const ConversationTabView = memo(function ConversationTabView({
       // content — including whatever blocks it carries — on a button that
       // promises to SEND it.
       if (!payload) return
+      // Read the lane ONCE and use it for both the call and the failure copy;
+      // re-reading `feedback.channel` after the await could straddle a
+      // mid-round-trip channel flip and label the toast for the wrong lane.
+      const lane = queueRowLane(item)
       // Set before the first await so the flush effect above is already held
       // when the turn-end edge lands mid-round-trip.
       setQueueSteerInFlight(true)
       try {
-        await feedbackSteer(payload.text, payload.blocks)
+        await feedbackSteer(
+          payload.text,
+          payload.blocks,
+          lane === "pull" ? { preferPull: true } : undefined
+        )
         mqRemove(id)
       } catch (err: unknown) {
         if (isNoActiveTurnRejection(err)) {
@@ -2145,15 +2173,14 @@ const ConversationTabView = memo(function ConversationTabView({
           toast.info(tCmp("steerQueuedInstead"))
           return
         }
-        toast.error(
-          tCmp(feedback.channel === "pull" ? "steerNoteFailed" : "steerFailed"),
-          { description: toErrorMessage(err) }
-        )
+        toast.error(tCmp(lane === "pull" ? "steerNoteFailed" : "steerFailed"), {
+          description: toErrorMessage(err),
+        })
       } finally {
         setQueueSteerInFlight(false)
       }
     },
-    [msgQueue, feedbackSteer, mqRemove, feedback.channel, tCmp]
+    [msgQueue, feedbackSteer, mqRemove, queueRowLane, tCmp]
   )
 
   return (
@@ -2269,6 +2296,7 @@ const ConversationTabView = memo(function ConversationTabView({
           : undefined
       }
       steerChannel={feedback.channel}
+      queueSteerChannelFor={queueRowLane}
     >
       {isWelcomeMode ? (
         // Same overlay scrollbar as the sidebar / file lists (os-theme-codeg)

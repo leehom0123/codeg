@@ -542,7 +542,12 @@ describe("useSessionFeedback", () => {
     await act(async () => {
       await result.current.steer("go left")
     })
-    expect(mockSubmit).toHaveBeenCalledWith("c1", "go left", undefined)
+    expect(mockSubmit).toHaveBeenCalledWith(
+      "c1",
+      "go left",
+      undefined,
+      undefined
+    )
     expect(result.current.notes.map((n) => n.id)).toContain("st1")
 
     // A draft with attachments hands its full block list through untouched —
@@ -560,7 +565,12 @@ describe("useSessionFeedback", () => {
     await act(async () => {
       await result.current.steer("match this", blocks)
     })
-    expect(mockSubmit).toHaveBeenCalledWith("c1", "match this", blocks)
+    expect(mockSubmit).toHaveBeenCalledWith(
+      "c1",
+      "match this",
+      blocks,
+      undefined
+    )
 
     const noTurn = new Error("no turn")
     mockSubmit.mockRejectedValueOnce(noTurn)
@@ -572,6 +582,63 @@ describe("useSessionFeedback", () => {
     ).rejects.toBe(noTurn)
     expect(toast.error).not.toHaveBeenCalled()
     expect(toast.info).not.toHaveBeenCalled()
+  })
+
+  it("preferPull rides the pull lane and a pending result is NOT a downgrade", async () => {
+    // The queued-row insert on a native session: it ASKED for the pull lane,
+    // so the `pending` status is the requested outcome — neither the
+    // downgrade toast nor the channel flip may fire (the pending-but-asked-
+    // for-native case reconciles both; see the startedNewTurn tests).
+    mockSnapshot.mockResolvedValue(
+      snapshot({
+        feedback_tool_available: true,
+        native_steering_available: true,
+      })
+    )
+    const { result } = renderHook(() => useSessionFeedback(baseProps))
+    await waitFor(() => expect(result.current.channel).toBe("native"))
+    expect(result.current.pullAvailable).toBe(true)
+
+    mockSubmit.mockResolvedValueOnce(note("pf1", "queued row", "pending"))
+    await act(async () => {
+      await result.current.steer("queued row", undefined, { preferPull: true })
+    })
+    expect(mockSubmit).toHaveBeenCalledWith("c1", "queued row", undefined, true)
+    expect(toast.info).not.toHaveBeenCalled()
+    expect(result.current.channel).toBe("native")
+    expect(result.current.notes.map((n) => n.id)).toContain("pf1")
+  })
+
+  it("pullAvailable tracks the tool bit independently of the channel", async () => {
+    // Pull-only session: both read pull. Native session WITHOUT the tool: the
+    // channel says native and pullAvailable says false — the host must not
+    // promise the non-interrupting lane it cannot honor.
+    mockSnapshot.mockResolvedValue(
+      snapshot({
+        feedback_tool_available: true,
+        native_steering_available: false,
+      })
+    )
+    const pullOnly = renderHook(() => useSessionFeedback(baseProps))
+    // Wait on the bit the snapshot carries, NOT on `channel`: a pull session
+    // reads "pull" from the initial state too, so waiting on it can resolve
+    // before the hydrate round-trip and read a stale `false` here.
+    await waitFor(() =>
+      expect(pullOnly.result.current.pullAvailable).toBe(true)
+    )
+    expect(pullOnly.result.current.channel).toBe("pull")
+
+    mockSnapshot.mockResolvedValue(
+      snapshot({
+        feedback_tool_available: false,
+        native_steering_available: true,
+      })
+    )
+    const nativeOnly = renderHook(() => useSessionFeedback(baseProps))
+    await waitFor(() =>
+      expect(nativeOnly.result.current.channel).toBe("native")
+    )
+    expect(nativeOnly.result.current.pullAvailable).toBe(false)
   })
 
   it("converges after the real startedNewTurn round: delivered result + backend flag off", async () => {

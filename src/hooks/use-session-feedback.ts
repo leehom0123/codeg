@@ -87,6 +87,11 @@ export interface UseSessionFeedback {
    *  copy and the composer's mid-turn send entry. Backend-synthesized — never
    *  derived from agent type here. */
   channel: "native" | "pull"
+  /** Whether THIS session's `check_user_feedback` pull tool is live (from the
+   *  snapshot). A native session has BOTH lanes; a host that wants the
+   *  non-interrupting lane (queued-row inserts) reads this alongside
+   *  {@link channel} to decide whether `preferPull` can actually be honored. */
+  pullAvailable: boolean
   /** Whether THIS session has a working mid-turn delivery channel at all: a
    *  live connection plus native push or the pull tool. Gates the composer's
    *  mid-turn send affordance (`channel` picks its copy); a session with
@@ -122,8 +127,16 @@ export interface UseSessionFeedback {
    *  draft when it holds attachments (native wire only; the backend's
    *  `NoActiveTurn` rejection on the pull path reroutes it to the queue
    *  whole, so an attachment is never silently dropped); `text` stays the
-   *  recorded/display form. */
-  steer: (text: string, blocks?: PromptInputBlock[]) => Promise<FeedbackItem>
+   *  recorded/display form. `opts.preferPull` asks the backend for the
+   *  non-interrupting pull lane on a native session (queued-row inserts):
+   *  the note waits for the agent's next check instead of pre-empting the
+   *  running generation. Meaningless with `blocks` — the pull lane is plain
+   *  text — so only pair it with block-less payloads. */
+  steer: (
+    text: string,
+    blocks?: PromptInputBlock[],
+    opts?: { preferPull?: boolean }
+  ) => Promise<FeedbackItem>
 }
 
 export function useSessionFeedback({
@@ -426,18 +439,29 @@ export function useSessionFeedback({
   const steer = useCallback(
     async (
       rawText: string,
-      blocks?: PromptInputBlock[]
+      blocks?: PromptInputBlock[],
+      opts?: { preferPull?: boolean }
     ): Promise<FeedbackItem> => {
       const text = rawText.trim()
       if (!text || !connectionId) {
         throw new Error("nothing to steer")
       }
-      const item = await submitSessionFeedback(connectionId, text, blocks)
+      const item = await submitSessionFeedback(
+        connectionId,
+        text,
+        blocks,
+        opts?.preferPull
+      )
       // A resolution that landed after a connection switch must not touch the
       // new connection's channel state or note list (reconcileChannel guards
       // itself too; the append needs the same protection).
       if (connectionIdRef.current === connectionId) {
-        reconcileChannel(item)
+        // A preferPull submit that came back `pending` is the lane the caller
+        // ASKED for, not a backend downgrade — reconciling it would toast
+        // "channel changed" at the user for a change they initiated. (On the
+        // rarer no-tool fallback the backend injected natively, which also
+        // proves nothing about the channel state.)
+        if (!opts?.preferPull) reconcileChannel(item)
         // Optimistically add; the broadcast event dedups against this by id.
         setNotes((prev) =>
           prev.some((n) => n.id === item.id) ? prev : [...prev, item]
@@ -523,6 +547,7 @@ export function useSessionFeedback({
       featureEnabled: enabled,
       canSubmit,
       channel,
+      pullAvailable: toolAvailable,
       steerAvailable,
       showList,
       notesExpired,

@@ -46,6 +46,8 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   // tool name back out of the transcript — so the same call rendered one way
   // while it ran and another way on reload.
   powershell: "bash",
+  // `pwsh` reaches clients as the same tool's other spelling.
+  pwsh: "bash",
   exec_command: "exec_command",
   "functions.exec_command": "exec_command",
   "functions.read": "read",
@@ -165,12 +167,6 @@ const EXACT_TOOL_NAME_ALIASES: Record<string, string> = {
   lsp_goto_definition: "lsp",
   lsp_servers: "lsp",
   execute: "bash",
-  // Claude Code's PowerShell tool: same `{command, description, …}` envelope
-  // as Bash, so it belongs on the Terminal card — and only the command-card
-  // branch reads `description` (claude-agent-acp lifts `_meta.claudeCode.title`
-  // for Bash alone, so the input field is the sole source here).
-  powershell: "bash",
-  pwsh: "bash",
   search: "grep",
   fetch: "webfetch",
   think: "task",

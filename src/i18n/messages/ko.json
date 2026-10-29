@@ -4067,6 +4067,7 @@
           "background": "백그라운드 작업",
           "plan": "계획",
           "question": "질문",
+          "renderPage": "페이지",
           "image": "이미지",
           "goal": "목표",
           "other": "단계"
@@ -4174,6 +4175,28 @@
         "awaiting": "답변을 기다리는 중…",
         "declined": "이 질문을 건너뛰었습니다 — 에이전트가 자체 판단으로 진행했습니다.",
         "noSelection": "선택 없음"
+      },
+      "renderPage": {
+        "title": "페이지",
+        "waitingHint": "페이지에서 답변해 주세요.",
+        "annotate": "페이지에 주석",
+        "annotateStop": "주석 종료",
+        "annotateElement": "요소",
+        "annotateRegion": "영역",
+        "annotateDraw": "그리기",
+        "annotatePlaceholder": "메모 (선택)",
+        "annotateSend": "보내기",
+        "annotateCancel": "취소",
+        "annotateChip": "페이지 주석{n}",
+        "dismiss": "답변 없이 닫기",
+        "submitError": "답변을 보내지 못했습니다. 다시 시도해 주세요."
+      },
+      "renderPageResult": {
+        "title": "페이지",
+        "awaiting": "답변을 기다리는 중…",
+        "declined": "이 페이지를 닫았습니다 — 에이전트가 자체 판단으로 진행했습니다.",
+        "answeredLabel": "답변:",
+        "noSummary": "페이지에서 답변됨"
       },
       "configStale": {
         "agentConfigTitle": "에이전트 설정이 업데이트되었습니다",

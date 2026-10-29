@@ -4067,6 +4067,7 @@
           "background": "Background task",
           "plan": "Plan",
           "question": "Question",
+          "renderPage": "Page",
           "image": "Image",
           "goal": "Goal",
           "other": "Step"
@@ -4174,6 +4175,28 @@
         "awaiting": "Waiting for your answer…",
         "declined": "You dismissed this — the agent used its own judgment.",
         "noSelection": "No selection"
+      },
+      "renderPage": {
+        "title": "Page",
+        "waitingHint": "Answer on the page.",
+        "annotate": "Annotate the page",
+        "annotateStop": "Stop annotating",
+        "annotateElement": "Element",
+        "annotateRegion": "Region",
+        "annotateDraw": "Draw",
+        "annotatePlaceholder": "Note (optional)",
+        "annotateSend": "Send",
+        "annotateCancel": "Cancel",
+        "annotateChip": "Page annotation {n}",
+        "dismiss": "Close without answering",
+        "submitError": "Couldn't send your answer. Please try again."
+      },
+      "renderPageResult": {
+        "title": "Page",
+        "awaiting": "Waiting for your answer…",
+        "declined": "You dismissed this — the agent used its own judgment.",
+        "answeredLabel": "Answer:",
+        "noSummary": "Answered on the page"
       },
       "configStale": {
         "agentConfigTitle": "Agent settings updated",

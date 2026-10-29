@@ -4067,6 +4067,7 @@
           "background": "مهمة في الخلفية",
           "plan": "خطة",
           "question": "سؤال",
+          "renderPage": "صفحة",
           "image": "صورة",
           "goal": "هدف",
           "other": "خطوة"
@@ -4174,6 +4175,28 @@
         "awaiting": "في انتظار إجابتك…",
         "declined": "لقد تجاهلت هذا — استخدم الوكيل حكمه الخاص.",
         "noSelection": "لا يوجد اختيار"
+      },
+      "renderPage": {
+        "title": "صفحة",
+        "waitingHint": "أجب في الصفحة.",
+        "annotate": "التعليق على الصفحة",
+        "annotateStop": "إيقاف التعليق",
+        "annotateElement": "عنصر",
+        "annotateRegion": "منطقة",
+        "annotateDraw": "رسم",
+        "annotatePlaceholder": "ملاحظة (اختياري)",
+        "annotateSend": "إرسال",
+        "annotateCancel": "إلغاء",
+        "annotateChip": "تعليق الصفحة {n}",
+        "dismiss": "إغلاق دون إجابة",
+        "submitError": "تعذّر إرسال إجابتك. حاول مرة أخرى."
+      },
+      "renderPageResult": {
+        "title": "صفحة",
+        "awaiting": "في انتظار إجابتك…",
+        "declined": "لقد أغلقت هذه الصفحة — استخدم الوكيل حكمه الخاص.",
+        "answeredLabel": "الإجابة:",
+        "noSummary": "تمت الإجابة في الصفحة"
       },
       "configStale": {
         "agentConfigTitle": "تم تحديث إعدادات الوكيل",

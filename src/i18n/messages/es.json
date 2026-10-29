@@ -4067,6 +4067,7 @@
           "background": "Tarea en segundo plano",
           "plan": "Plan",
           "question": "Pregunta",
+          "renderPage": "Página",
           "image": "Imagen",
           "goal": "Objetivo",
           "other": "Paso"
@@ -4174,6 +4175,28 @@
         "awaiting": "Esperando tu respuesta…",
         "declined": "Descartaste esto: el agente usó su propio criterio.",
         "noSelection": "Sin selección"
+      },
+      "renderPage": {
+        "title": "Página",
+        "waitingHint": "Responde en la página.",
+        "annotate": "Anotar la página",
+        "annotateStop": "Dejar de anotar",
+        "annotateElement": "Elemento",
+        "annotateRegion": "Región",
+        "annotateDraw": "Dibujo",
+        "annotatePlaceholder": "Nota (opcional)",
+        "annotateSend": "Enviar",
+        "annotateCancel": "Cancelar",
+        "annotateChip": "Anotación de página {n}",
+        "dismiss": "Cerrar sin responder",
+        "submitError": "No se pudo enviar tu respuesta. Inténtalo de nuevo."
+      },
+      "renderPageResult": {
+        "title": "Página",
+        "awaiting": "Esperando tu respuesta…",
+        "declined": "Descartaste esto: el agente usó su propio criterio.",
+        "answeredLabel": "Respuesta:",
+        "noSummary": "Respondido en la página"
       },
       "configStale": {
         "agentConfigTitle": "Configuración del agente actualizada",

@@ -4067,6 +4067,7 @@
           "background": "Tâche en arrière-plan",
           "plan": "Plan",
           "question": "Question",
+          "renderPage": "Page",
           "image": "Image",
           "goal": "Objectif",
           "other": "Étape"
@@ -4174,6 +4175,28 @@
         "awaiting": "En attente de ta réponse…",
         "declined": "Tu as ignoré cette question — l’agent a utilisé son propre jugement.",
         "noSelection": "Aucune sélection"
+      },
+      "renderPage": {
+        "title": "Page",
+        "waitingHint": "Réponds sur la page.",
+        "annotate": "Annoter la page",
+        "annotateStop": "Quitter l’annotation",
+        "annotateElement": "Élément",
+        "annotateRegion": "Zone",
+        "annotateDraw": "Dessin",
+        "annotatePlaceholder": "Note (facultatif)",
+        "annotateSend": "Envoyer",
+        "annotateCancel": "Annuler",
+        "annotateChip": "Annotation de page {n}",
+        "dismiss": "Fermer sans répondre",
+        "submitError": "Envoi de la réponse impossible. Réessaie."
+      },
+      "renderPageResult": {
+        "title": "Page",
+        "awaiting": "En attente de ta réponse…",
+        "declined": "Tu as ignoré cette page — l’agent a utilisé son propre jugement.",
+        "answeredLabel": "Réponse :",
+        "noSummary": "Répondu sur la page"
       },
       "configStale": {
         "agentConfigTitle": "Paramètres de l'agent mis à jour",

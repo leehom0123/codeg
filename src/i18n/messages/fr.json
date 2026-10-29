@@ -5508,6 +5508,11 @@
       "short": "Laisse l'agent vous consulter avant de décider.",
       "hint": "Permet aux agents de s'interrompre et de vous poser une question à choix multiples affichée au-dessus de la zone de saisie de la conversation. L'agent attend votre réponse (ou que vous ignoriez)."
     },
+    "render": {
+      "label": "Rendre une page",
+      "short": "Laisse l'agent dessiner une page interactive dans le chat.",
+      "hint": "Permet aux agents de dessiner une petite page autonome dans la conversation — formulaires, choix, comparatifs. La page peut attendre votre réponse avant que l'agent continue, ou seulement s'afficher. Vous pouvez aussi annoter la page affichée — un élément, une zone, une note à main levée — et le rapport d’annotation revient à l’agent comme instruction."
+    },
     "sessions": {
       "label": "Obtenir les infos de session",
       "short": "Consulte les sessions passées et leurs résultats.",

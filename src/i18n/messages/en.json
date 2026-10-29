@@ -5508,6 +5508,11 @@
       "short": "Let the agent ask you before it decides.",
       "hint": "Let agents pause and ask you a multiple-choice question that appears above the conversation input box. The agent waits until you answer (or skip)."
     },
+    "render": {
+      "label": "Render page",
+      "short": "Let the agent draw an interactive page in the chat.",
+      "hint": "Let agents draw a small self-contained page in the chat — forms, choices, comparisons. A page can wait for you to submit an answer on it before the agent continues, or just show. You can also mark up a shown page — an element, a region, a freehand note — and the marked-up report goes back to the agent as your prompt."
+    },
     "sessions": {
       "label": "Get session info",
       "short": "Look up past sessions and their results.",

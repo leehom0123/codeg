@@ -5508,6 +5508,11 @@
       "short": "Lässt den Agenten vor einer Entscheidung nachfragen.",
       "hint": "Erlaubt Agenten, anzuhalten und dir eine Multiple-Choice-Frage zu stellen, die über dem Eingabefeld der Unterhaltung erscheint. Der Agent wartet, bis du antwortest (oder überspringst)."
     },
+    "render": {
+      "label": "Seite rendern",
+      "short": "Lässt den Agenten eine interaktive Seite im Chat zeichnen.",
+      "hint": "Erlaubt Agenten, eine kleine eigenständige Seite im Chat zu zeichnen – Formulare, Optionen, Vergleiche. Eine Seite kann auf deine Antwort warten, bevor der Agent fortfährt, oder nur anzeigen. Du kannst eine gezeigte Seite auch markieren – Element, Bereich, Freihandnotiz – und der Markierungsbericht geht als Eingabe an den Agenten zurück."
+    },
     "sessions": {
       "label": "Sitzungsinformationen abrufen",
       "short": "Schlägt frühere Sitzungen und Ergebnisse nach.",

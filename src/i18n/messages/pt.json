@@ -5508,6 +5508,11 @@
       "short": "Deixa o agente perguntar antes de decidir.",
       "hint": "Permite que os agentes pausem e façam uma pergunta de múltipla escolha que aparece acima da caixa de entrada da conversa. O agente aguarda até você responder (ou pular)."
     },
+    "render": {
+      "label": "Renderizar página",
+      "short": "Deixa o agente desenhar uma página interativa no chat.",
+      "hint": "Permite que os agentes desenhem uma página pequena e autossuficiente no chat — formulários, opções, comparações. A página pode esperar sua resposta antes de o agente continuar, ou apenas exibir. Você também pode marcar uma página exibida — elemento, região, rabisco — e o relatório de marcação volta ao agente como seu pedido."
+    },
     "sessions": {
       "label": "Obter informações da sessão",
       "short": "Consulta sessões anteriores e seus resultados.",

@@ -34,7 +34,7 @@ jobs:
           retention-days: 7
 
   build:
-    name: Server ${{ matrix.platform }}
+    name: Server and Desktop ${{ matrix.platform }}
     needs: web
     strategy:
       fail-fast: false
@@ -43,9 +43,13 @@ jobs:
           - runner: windows-2022
             platform: windows-x64
             suffix: .exe
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
           - runner: ubuntu-22.04
             platform: linux-x64
             suffix: ""
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -57,8 +61,10 @@ jobs:
       - name: Build Server binaries
         shell: bash
         working-directory: src-tauri
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          cargo build --locked --release --no-default-features --features server-bin,mcp-bin,computer-helper,cli-bin \
+          cargo build --locked --release --target "$TARGET" --no-default-features --features server-bin,mcp-bin,computer-helper,cli-bin \
             --bin codeg-server --bin codeg-mcp --bin codeg-computer-helper --bin codeg-cli
 
       - uses: actions/download-artifact@v4
@@ -67,15 +73,19 @@ jobs:
           path: out
 
       - name: Package Server
-        id: package
+        id: server_package
         shell: bash
         env:
           PLATFORM: ${{ matrix.platform }}
           SUFFIX: ${{ matrix.suffix }}
+          TARGET: ${{ matrix.target }}
         run: |
-          mkdir -p dist
-          for binary in codeg-server codeg-mcp codeg-computer-helper codeg-cli; do
-            cp "src-tauri/target/release/${binary}${SUFFIX}" dist/
+          release_dir="src-tauri/target/${TARGET}/release"
+          mkdir -p dist src-tauri/binaries
+          cp "${release_dir}/codeg-server${SUFFIX}" dist/
+          for binary in codeg-mcp codeg-computer-helper codeg-cli; do
+            cp "${release_dir}/${binary}${SUFFIX}" dist/
+            cp "${release_dir}/${binary}${SUFFIX}" "src-tauri/binaries/${binary}-${TARGET}${SUFFIX}"
           done
           cp -R out dist/web
           test -f dist/web/index.html
@@ -92,38 +102,15 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.name }}
-          path: ${{ steps.package.outputs.path }}
+          name: ${{ steps.server_package.outputs.name }}
+          path: ${{ steps.server_package.outputs.path }}
           if-no-files-found: error
 
-  desktop:
-    name: Desktop ${{ matrix.platform }}
-    needs: web
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: windows-2022
-            platform: windows-x64
-            target: x86_64-pc-windows-msvc
-            bundles: nsis
-          - runner: ubuntu-22.04
-            platform: linux-x64
-            target: x86_64-unknown-linux-gnu
-            bundles: deb,rpm
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
-
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
         run: |
@@ -133,11 +120,6 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: web-static
-          path: out
-
       - name: Build desktop installers
         shell: bash
         env:
@@ -145,10 +127,10 @@ jobs:
           BUNDLES: ${{ matrix.bundles }}
         run: |
           pnpm tauri build --target "$TARGET" --bundles "$BUNDLES" \
-            --config '{"build":{"beforeBuildCommand":"pnpm tauri:prepare-sidecars"},"bundle":{"createUpdaterArtifacts":false}}'
+            --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Name desktop artifact
-        id: package
+        id: desktop_package
         shell: bash
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -158,7 +140,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.name }}
+          name: ${{ steps.desktop_package.outputs.name }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
@@ -167,7 +149,7 @@ jobs:
 
   publish:
     name: Publish custom release
-    needs: [build, desktop]
+    needs: build
     runs-on: ubuntu-22.04
     permissions:
       contents: write

@@ -3,6 +3,16 @@ name: Build custom Codeg
 on:
   push:
     branches: [release/custom]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+
+concurrency:
+  group: custom-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -10,6 +20,7 @@ permissions:
 env:
   HUSKY: "0"
   NODE_OPTIONS: --max-old-space-size=4096
+  SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
 
 jobs:
   web:
@@ -17,6 +28,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -53,6 +66,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
@@ -91,7 +106,7 @@ jobs:
           test -f dist/web/index.html
           version="$(./dist/codeg-server${SUFFIX} --version)"
           ./dist/codeg-mcp${SUFFIX} --help
-          name="codeg-server-${version}-custom-${GITHUB_SHA:0:8}-${PLATFORM}"
+          name="codeg-server-${version}-custom-${SOURCE_SHA:0:8}-${PLATFORM}"
           path=dist/
           if [[ "$PLATFORM" == linux-x64 ]]; then
             path="${name}.tar.gz"
@@ -136,7 +151,7 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
-          echo "name=codeg-desktop-${version}-custom-${GITHUB_SHA:0:8}-${PLATFORM}" >> "$GITHUB_OUTPUT"
+          echo "name=codeg-desktop-${version}-custom-${SOURCE_SHA:0:8}-${PLATFORM}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -155,6 +170,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@v4
         with:
           pattern: codeg-*
@@ -163,11 +186,12 @@ jobs:
       - name: Publish Windows and Linux packages
         env:
           GH_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CODEG_CUSTOM_SIGNING_KEY }}
         shell: bash
         run: |
           version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
-          tag="custom-${version}-${GITHUB_SHA:0:8}"
-          build_id="${version}-custom-${GITHUB_SHA:0:8}"
+          tag="custom-${version}-${SOURCE_SHA:0:8}"
+          build_id="${version}-custom-${SOURCE_SHA:0:8}"
           shopt -s nullglob globstar
 
           windows_server="codeg-server-${build_id}-windows-x64"
@@ -186,13 +210,31 @@ jobs:
             exit 0
           fi
 
-          (cd "artifacts/${windows_server}" && zip -qr "../../${windows_server}.zip" .)
+          (cd "artifacts/${windows_server}" && zip -qr ../../codeg-server-windows-x64.zip .)
+          cp "artifacts/${linux_server}/${linux_server}.tar.gz" codeg-server-linux-x64.tar.gz
+          assets=(codeg-server-windows-x64.zip codeg-server-linux-x64.tar.gz
+            "${windows_desktop[@]}" "${linux_deb[@]}" "${linux_rpm[@]}")
+          for asset in "${assets[@]}"; do
+            pnpm tauri signer sign --app-version "$version" "$asset"
+          done
+          jq -n --arg version "$version" \
+            --arg base "https://github.com/${GITHUB_REPOSITORY}/releases/download/$tag" \
+            --arg win "$(basename "${windows_desktop[0]}")" \
+            --arg deb "$(basename "${linux_deb[0]}")" \
+            --arg rpm "$(basename "${linux_rpm[0]}")" \
+            --rawfile win_sig "${windows_desktop[0]}.sig" \
+            --rawfile deb_sig "${linux_deb[0]}.sig" \
+            --rawfile rpm_sig "${linux_rpm[0]}.sig" '
+            {version: $version, platforms: {
+              "windows-x86_64": {url: ($base + "/" + $win), signature: ($win_sig | rtrimstr("\n"))},
+              "linux-x86_64-deb": {url: ($base + "/" + $deb), signature: ($deb_sig | rtrimstr("\n"))},
+              "linux-x86_64-rpm": {url: ($base + "/" + $rpm), signature: ($rpm_sig | rtrimstr("\n"))}
+            }}' > latest.json
+
           if [[ -z "$release_status" ]]; then
-            gh release create "$tag" --target "$GITHUB_SHA" --title "Codeg custom ${build_id}" \
-              --notes "Custom Codeg build from \`${GITHUB_SHA}\`. Includes desktop and Server packages for Windows x64 and Linux x64." \
+            gh release create "$tag" --target "$SOURCE_SHA" --title "Codeg custom ${build_id}" \
+              --notes "Custom Codeg build from \`${SOURCE_SHA}\`. Includes desktop and Server packages for Windows x64 and Linux x64." \
               --draft
           fi
-          gh release upload "$tag" --clobber "${windows_server}.zip" \
-            "artifacts/${linux_server}/${linux_server}.tar.gz" \
-            "${windows_desktop[@]}" "${linux_deb[@]}" "${linux_rpm[@]}"
-          gh release edit "$tag" --draft=false --prerelease=false
+          gh release upload "$tag" --clobber "${assets[@]}" "${assets[@]/%/.sig}" latest.json
+          gh release edit "$tag" --draft=false --prerelease=false --latest

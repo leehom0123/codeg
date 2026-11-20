@@ -1,0 +1,58 @@
+name: Sync upstream release
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.repository == 'leehom0123/codeg' && github.ref == 'refs/heads/release/custom'
+    runs-on: ubuntu-22.04
+    outputs:
+      source_sha: ${{ steps.merge.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/custom
+          fetch-depth: 0
+      - name: Merge upstream main after a new release
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          upstream=spacering-net/codeg
+          tag="$(gh api "repos/$upstream/releases/latest" --jq .tag_name)"
+          git fetch --no-tags "https://github.com/$upstream.git" \
+            refs/heads/main:refs/remotes/upstream/main "refs/tags/$tag:refs/upstream/releases/$tag"
+          published_commit="$(git rev-parse "refs/upstream/releases/$tag^{commit}")"
+          git merge-base --is-ancestor "$published_commit" upstream/main
+          git fetch origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor origin/main upstream/main
+          git push origin refs/remotes/upstream/main:refs/heads/main
+          if git merge-base --is-ancestor "$published_commit" HEAD; then
+            echo "Upstream release $tag is already included."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-ff -m "Merge upstream main after $tag" upstream/main
+          git push origin HEAD:refs/heads/release/custom
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: sync
+    if: needs.sync.outputs.source_sha != ''
+    uses: ./.github/workflows/build-custom.yml
+    with:
+      source_sha: ${{ needs.sync.outputs.source_sha }}
+    secrets: inherit

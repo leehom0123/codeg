@@ -1,8 +1,8 @@
-name: Build Codeg session messaging
+name: Build custom Codeg
 
 on:
   push:
-    branches: [feat/session-messaging-047]
+    branches: [release/custom]
 
 permissions:
   contents: read
@@ -65,7 +65,7 @@ jobs:
           test -f dist/web/index.html
           version="$(./dist/codeg-server${SUFFIX} --version)"
           ./dist/codeg-mcp${SUFFIX} --help
-          name="codeg-server-${version}-session-messaging-${GITHUB_SHA:0:8}-${PLATFORM}"
+          name="codeg-server-${version}-custom-${GITHUB_SHA:0:8}-${PLATFORM}"
           path=dist/
           if [[ "$PLATFORM" == linux-x64 ]]; then
             path="${name}.tar.gz"
@@ -132,7 +132,7 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
-          echo "name=codeg-desktop-${version}-session-messaging-${GITHUB_SHA:0:8}-${PLATFORM}" >> "$GITHUB_OUTPUT"
+          echo "name=codeg-desktop-${version}-custom-${GITHUB_SHA:0:8}-${PLATFORM}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:

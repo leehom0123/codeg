@@ -1,0 +1,81 @@
+name: Build session messaging server
+
+on:
+  push:
+    branches: [feat/session-messaging-047]
+
+permissions:
+  contents: read
+
+env:
+  HUSKY: "0"
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  build:
+    name: Server ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            platform: windows-x64
+            suffix: .exe
+          - runner: ubuntu-22.04
+            platform: linux-x64
+            suffix: ""
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Build Web frontend
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build Server binaries
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          cargo build --locked --release --no-default-features --features server-bin,mcp-bin,computer-helper,cli-bin \
+            --bin codeg-server --bin codeg-mcp --bin codeg-computer-helper --bin codeg-cli
+
+      - name: Package Server
+        id: package
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          mkdir -p dist
+          for binary in codeg-server codeg-mcp codeg-computer-helper codeg-cli; do
+            cp "src-tauri/target/release/${binary}${SUFFIX}" dist/
+          done
+          cp -R out dist/web
+          test -f dist/web/index.html
+          version="$(./dist/codeg-server${SUFFIX} --version)"
+          ./dist/codeg-mcp${SUFFIX} --help
+          name="codeg-server-${version}-session-messaging-${GITHUB_SHA:0:8}-${PLATFORM}"
+          path=dist/
+          if [[ "$PLATFORM" == linux-x64 ]]; then
+            path="${name}.tar.gz"
+            tar -czf "$path" -C dist .
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error

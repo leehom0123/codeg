@@ -12,8 +12,30 @@ env:
   NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
+  web:
+    name: Build Web frontend
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Build static export
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-static
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
+
   build:
     name: Server ${{ matrix.platform }}
+    needs: web
     strategy:
       fail-fast: false
       matrix:
@@ -27,21 +49,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-
-      - name: Build Web frontend
-        shell: bash
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
 
       - name: Build Server binaries
         shell: bash
@@ -49,6 +60,11 @@ jobs:
         run: |
           cargo build --locked --release --no-default-features --features server-bin,mcp-bin,computer-helper,cli-bin \
             --bin codeg-server --bin codeg-mcp --bin codeg-computer-helper --bin codeg-cli
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-static
+          path: out
 
       - name: Package Server
         id: package
@@ -82,6 +98,7 @@ jobs:
 
   desktop:
     name: Desktop ${{ matrix.platform }}
+    needs: web
     strategy:
       fail-fast: false
       matrix:
@@ -116,6 +133,11 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-static
+          path: out
+
       - name: Build desktop installers
         shell: bash
         env:
@@ -123,7 +145,7 @@ jobs:
           BUNDLES: ${{ matrix.bundles }}
         run: |
           pnpm tauri build --target "$TARGET" --bundles "$BUNDLES" \
-            --config '{"bundle":{"createUpdaterArtifacts":false}}'
+            --config '{"build":{"beforeBuildCommand":"pnpm tauri:prepare-sidecars"},"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Name desktop artifact
         id: package
@@ -142,3 +164,53 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
           if-no-files-found: error
+
+  publish:
+    name: Publish custom release
+    needs: [build, desktop]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: codeg-*
+          path: artifacts
+
+      - name: Publish Windows and Linux packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          tag="custom-${version}-${GITHUB_SHA:0:8}"
+          build_id="${version}-custom-${GITHUB_SHA:0:8}"
+          shopt -s nullglob globstar
+
+          windows_server="codeg-server-${build_id}-windows-x64"
+          linux_server="codeg-server-${build_id}-linux-x64"
+          windows_desktop=(artifacts/codeg-desktop-"${build_id}"-windows-x64/**/*.exe)
+          linux_deb=(artifacts/codeg-desktop-"${build_id}"-linux-x64/**/*.deb)
+          linux_rpm=(artifacts/codeg-desktop-"${build_id}"-linux-x64/**/*.rpm)
+          test -f "artifacts/${windows_server}/codeg-server.exe"
+          test -f "artifacts/${linux_server}/${linux_server}.tar.gz"
+          test "${#windows_desktop[@]}" -eq 1
+          test "${#linux_deb[@]}" -eq 1
+          test "${#linux_rpm[@]}" -eq 1
+
+          release_status="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [[ "$release_status" == false ]]; then
+            exit 0
+          fi
+
+          (cd "artifacts/${windows_server}" && zip -qr "../../${windows_server}.zip" .)
+          if [[ -z "$release_status" ]]; then
+            gh release create "$tag" --target "$GITHUB_SHA" --title "Codeg custom ${build_id}" \
+              --notes "Custom Codeg build from \`${GITHUB_SHA}\`. Includes desktop and Server packages for Windows x64 and Linux x64." \
+              --draft --prerelease
+          fi
+          gh release upload "$tag" --clobber "${windows_server}.zip" \
+            "artifacts/${linux_server}/${linux_server}.tar.gz" \
+            "${windows_desktop[@]}" "${linux_deb[@]}" "${linux_rpm[@]}"
+          gh release edit "$tag" --draft=false

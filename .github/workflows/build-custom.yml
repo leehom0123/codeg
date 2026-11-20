@@ -190,9 +190,9 @@ jobs:
           if [[ -z "$release_status" ]]; then
             gh release create "$tag" --target "$GITHUB_SHA" --title "Codeg custom ${build_id}" \
               --notes "Custom Codeg build from \`${GITHUB_SHA}\`. Includes desktop and Server packages for Windows x64 and Linux x64." \
-              --draft --prerelease
+              --draft
           fi
           gh release upload "$tag" --clobber "${windows_server}.zip" \
             "artifacts/${linux_server}/${linux_server}.tar.gz" \
             "${windows_desktop[@]}" "${linux_deb[@]}" "${linux_rpm[@]}"
-          gh release edit "$tag" --draft=false
+          gh release edit "$tag" --draft=false --prerelease=false

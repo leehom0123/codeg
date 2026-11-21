@@ -3802,6 +3802,7 @@
         "downloadFailed": "فشل تنزيل {name}"
       },
       "messageList": {
+        "sessionMessageSource": "من الجلسة: {session}",
         "loading": "جارٍ التحميل...",
         "loadBackgroundActivity": "تحميل نشاط الخلفية",
         "loadEarlier": "تحميل الرسائل السابقة",

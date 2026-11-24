@@ -58,21 +58,22 @@ use crate::acp::delegation::transport::{
     client_computer_launch_round_trip, client_computer_snapshot_round_trip,
     client_computer_verify_round_trip, client_computer_windows_round_trip,
     client_create_automation_round_trip, client_create_work_task_round_trip,
-    client_feedback_round_trip, client_list_assistants_round_trip, client_list_models_round_trip, client_ping,
-    client_rename_session_round_trip, client_result_schema_round_trip,
-    client_resume_task_round_trip, client_round_trip, client_session_round_trip,
-    client_status_round_trip, client_submit_result_round_trip, client_task_complete_round_trip,
-    client_task_progress_round_trip, BrokerAskRequest, BrokerBrowserActRequest,
-    BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
-    BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
-    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
-    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
-    BrokerComputerClipboardRequest, BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest,
-    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
-    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest,
-    BrokerListModelsRequest, BrokerRenameSessionRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
-    BrokerResumeTaskRequest, BrokerSessionHistoryRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
+    client_feedback_round_trip, client_list_agent_options_round_trip,
+    client_list_assistants_round_trip, client_ping, client_rename_session_round_trip,
+    client_result_schema_round_trip, client_resume_task_round_trip, client_round_trip,
+    client_session_round_trip, client_status_round_trip, client_submit_result_round_trip,
+    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
+    BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
+    BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest,
+    BrokerBrowserTabsRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
+    BrokerCommitFeedbackRequest, BrokerComputerActRequest, BrokerComputerAppsRequest,
+    BrokerComputerCaptureRequest, BrokerComputerClipboardRequest, BrokerComputerLaunchRequest,
+    BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest, BrokerComputerWindowsRequest,
+    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
+    BrokerListAgentOptionsRequest, BrokerListAssistantsRequest, BrokerRenameSessionRequest,
+    BrokerRequest, BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest,
+    BrokerSessionHistoryRequest, BrokerSessionRequest, BrokerStatusRequest,
+    BrokerSubmitResultRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
 use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::question::parse_questions;
@@ -320,8 +321,8 @@ impl CompanionFeatures {
             "computer_clipboard_read" | "computer_clipboard_write" => {
                 self.computer && self.computer_clipboard
             }
+            "list_agent_options" => self.delegation || self.session_messaging,
             "delegate_to_agent"
-            | "list_models"
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
@@ -692,7 +693,7 @@ pub async fn dispatch_line(
                 }
             }
             remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
-            append_custom_agents_to_delegate_enum(&mut tools, &ctx.custom_agents);
+            append_custom_agents_to_creation_tools(&mut tools, &ctx.custom_agents);
             if ctx.features.allows_tool("delegate_to_agent") {
                 offer_assistants_in_delegate_schema(ctx, &mut tools).await;
             }
@@ -751,24 +752,31 @@ fn remove_disabled_agents_from_delegate_enum(tools: &mut Value, disabled_agents:
 /// schema shape change) leaves the tools untouched rather than erroring —
 /// serving the narrower built-in enum is strictly better than serving no
 /// tools at all.
-fn append_custom_agents_to_delegate_enum(tools: &mut Value, custom_agents: &[String]) {
+fn append_custom_agents_to_creation_tools(tools: &mut Value, custom_agents: &[String]) {
     if custom_agents.is_empty() {
         return;
     }
     let Some(arr) = tools.as_array_mut() else {
         return;
     };
-    let Some(variants) = arr
-        .iter_mut()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("delegate_to_agent"))
-        .and_then(|t| t.pointer_mut("/inputSchema/properties/agent_type/enum"))
-        .and_then(|e| e.as_array_mut())
-    else {
-        return;
-    };
-    for slug in custom_agents {
-        if !variants.iter().any(|v| v.as_str() == Some(slug)) {
-            variants.push(Value::String(slug.clone()));
+    for tool in arr.iter_mut().filter(|tool| {
+        matches!(
+            tool.get("name").and_then(Value::as_str),
+            Some("delegate_to_agent" | "create_session")
+        )
+    }) {
+        if let Some(variants) = tool
+            .pointer_mut("/inputSchema/properties/agent_type/enum")
+            .and_then(Value::as_array_mut)
+        {
+            for slug in custom_agents {
+                if !variants
+                    .iter()
+                    .any(|variant| variant.as_str() == Some(slug))
+                {
+                    variants.push(Value::String(slug.clone()));
+                }
+            }
         }
     }
 }
@@ -919,26 +927,33 @@ async fn build_tools_call_spawn(
         return LineAction::Respond(err(id, -32602, format!("unknown tool: {name}")));
     }
     match name.as_str() {
-        "list_models" => {
+        "list_agent_options" => {
             let agent_type = match arguments.get("agent_type").and_then(Value::as_str) {
                 Some(value) if !value.is_empty() => value.to_owned(),
                 _ => {
-                    return LineAction::Respond(err(id, -32602, "list_models requires agent_type"))
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        "list_agent_options requires agent_type",
+                    ))
                 }
             };
-            let model = match arguments.get("model") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(value)) => Some(value.clone()),
-                _ => return LineAction::Respond(err(id, -32602, "model must be a string")),
-            };
-            let request = BrokerListModelsRequest {
+            if arguments.as_object().is_some_and(|args| args.len() != 1) {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "list_agent_options accepts only agent_type",
+                ));
+            }
+            let request = BrokerListAgentOptionsRequest {
                 token: ctx.token.clone(),
                 agent_type,
-                model,
             };
             let round_trip =
-                Box::pin(async move { client_list_models_round_trip(&socket, &request).await });
-            register_and_spawn(inflight, id, None, round_trip, render_models_result).await
+                Box::pin(
+                    async move { client_list_agent_options_round_trip(&socket, &request).await },
+                );
+            register_and_spawn(inflight, id, None, round_trip, render_agent_options_result).await
         }
         "delegate_to_agent" => {
             if !ctx.features.session_messaging
@@ -1959,7 +1974,7 @@ fn normalize_status_task_ids(arguments: &Value) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-fn render_models_result(outcome: &Value) -> Value {
+fn render_agent_options_result(outcome: &Value) -> Value {
     json!({
         "content": [{"type": "text", "text": outcome.to_string()}],
         "structuredContent": outcome,
@@ -4829,7 +4844,7 @@ mod tests {
         assert_eq!(tools.len(), 5);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"delegate_to_agent"));
-        assert!(names.contains(&"list_models"));
+        assert!(names.contains(&"list_agent_options"));
         assert!(names.contains(&"get_delegation_status"));
         assert!(names.contains(&"cancel_delegation"));
         assert!(names.contains(&"resume_delegation"));
@@ -5477,14 +5492,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_models_follows_delegation_feature_and_validates_arguments() {
-        assert!(CompanionFeatures::parse(None).allows_tool("list_models"));
-        assert!(!CompanionFeatures::parse(Some("feedback")).allows_tool("list_models"));
+    async fn list_agent_options_follows_delegation_feature_and_validates_arguments() {
+        assert!(CompanionFeatures::parse(None).allows_tool("list_agent_options"));
+        assert!(!CompanionFeatures::parse(Some("feedback")).allows_tool("list_agent_options"));
         let bad = unwrap_respond(dispatch_for_test(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_models","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_agent_options","arguments":{}}}"#,
         ).await);
         assert_eq!(bad.error.unwrap().code, -32602);
-        let rendered = render_models_result(&json!({"models": [], "error": "disabled"}));
+        let rendered = render_agent_options_result(&json!({"models": [], "error": "disabled"}));
         assert_eq!(rendered["isError"], true);
     }
 

@@ -33,10 +33,10 @@ use crate::acp::delegation::transport::{
     BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
     BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest,
     BrokerComputerWindowsRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
-    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerListModelsRequest, BrokerMessage, BrokerRenameSessionRequest,
-    BrokerRequest, BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest,
-    BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerFeedbackRequest, BrokerListAgentOptionsRequest, BrokerListAssistantsRequest,
+    BrokerMessage, BrokerRenameSessionRequest, BrokerRequest, BrokerResponse,
+    BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest,
+    BrokerSubmitResultRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::delegation::assistants::assistant_not_found_message;
 use crate::acp::delegation::types::{
@@ -459,8 +459,8 @@ impl DelegationListener {
                 // `BrokerMessage::Ping`.
                 outcome: serde_json::json!({ "ok": true, "assistants": true }),
             },
-            BrokerMessage::ListModels(req) => BrokerResponse {
-                outcome: self.process_list_models(req).await,
+            BrokerMessage::ListAgentOptions(req) => BrokerResponse {
+                outcome: self.process_list_agent_options(req).await,
             },
             BrokerMessage::ListAssistants(req) => BrokerResponse {
                 outcome: self.process_list_assistants(req).await,
@@ -1469,28 +1469,41 @@ impl DelegationListener {
         serde_json::json!({ "assistants": self.broker.assistant_roster().await })
     }
 
-    async fn process_list_models(&self, req: BrokerListModelsRequest) -> Value {
+    async fn process_list_agent_options(&self, req: BrokerListAgentOptionsRequest) -> Value {
         let Some(entry) = self.tokens.lookup(&req.token).await else {
-            return serde_json::json!({"models": [], "error": "invalid token"});
+            return serde_json::json!({"error": "invalid token"});
         };
         if entry.agent_hosts_tools {
-            return serde_json::json!({"models": [], "error": "tool is unavailable for this agent"});
+            return serde_json::json!({"error": "tool is unavailable for this agent"});
         }
         let Some(agent_type) = crate::models::AgentType::from_wire(&req.agent_type) else {
-            return serde_json::json!({"models": [], "error": "invalid agent_type"});
+            return serde_json::json!({"error": "invalid agent_type"});
+        };
+        let inherited_mode_id = match self.session_creator.get() {
+            Some(creator) => {
+                creator
+                    .inherited_mode_id(&entry.parent_connection_id, agent_type)
+                    .await
+            }
+            None => None,
         };
         match self
             .broker
-            .list_models(
+            .list_agent_options(
                 &entry.parent_connection_id,
                 agent_type,
                 Some(entry.working_dir.to_string_lossy().into_owned()),
-                req.model,
             )
             .await
         {
-            Ok(models) => serde_json::json!({"agent_type": req.agent_type, "models": models}),
-            Err(error) => serde_json::json!({"models": [], "error": error}),
+            Ok(options) => serde_json::json!({
+                "agent_type": req.agent_type,
+                "model_option_id": options.model_option_id,
+                "models": options.models,
+                "modes": options.modes,
+                "inherited_mode_id": inherited_mode_id,
+            }),
+            Err(error) => serde_json::json!({"error": error}),
         }
     }
 
@@ -4862,14 +4875,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_models_requires_token_and_host_tool_access() {
+    async fn list_agent_options_requires_token_and_host_tool_access() {
         let (listener, tokens) = assistant_listener(Arc::new(MockSpawner::new())).await;
-        let request = |token: &str| BrokerListModelsRequest {
+        let request = |token: &str| BrokerListAgentOptionsRequest {
             token: token.into(),
             agent_type: "codex".into(),
-            model: None,
         };
-        let invalid = listener.process_list_models(request("invalid")).await;
+        let invalid = listener
+            .process_list_agent_options(request("invalid"))
+            .await;
         assert_eq!(invalid["error"], "invalid token");
         tokens
             .register(
@@ -4881,9 +4895,13 @@ mod tests {
                 },
             )
             .await;
-        let hosted = listener.process_list_models(request("hosted")).await;
+        let hosted = listener.process_list_agent_options(request("hosted")).await;
         assert!(hosted.get("error").is_some());
-        let allowed = serve(listener.clone(), BrokerMessage::ListModels(request("tok"))).await;
+        let allowed = serve(
+            listener.clone(),
+            BrokerMessage::ListAgentOptions(request("tok")),
+        )
+        .await;
         assert_eq!(allowed["models"], json!([]));
         assert!(allowed.get("error").is_none());
         listener
@@ -4891,7 +4909,7 @@ mod tests {
             .set_config(DelegationConfig::default())
             .await;
         assert!(listener
-            .process_list_models(request("tok"))
+            .process_list_agent_options(request("tok"))
             .await
             .get("error")
             .is_some());

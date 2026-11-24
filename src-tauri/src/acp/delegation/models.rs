@@ -19,15 +19,23 @@ pub struct ModelInfo {
     pub slug: String,
     /// None means the runtime did not advertise levels for this model.
     pub reasoning: Option<Vec<String>>,
+    pub reasoning_option_id: Option<String>,
     /// Never infer a context window from a model's name.
     pub context_window: Option<u64>,
 }
 
-fn is_model(option: &SessionConfigOptionInfo) -> bool {
-    option.category.as_deref() == Some("model") || option.id == "model"
+pub(crate) fn is_model(option: &SessionConfigOptionInfo) -> bool {
+    match option.category.as_deref() {
+        Some("model") => true,
+        Some("mode") => false,
+        _ => option.id == "model",
+    }
 }
 
-fn is_reasoning(option: &SessionConfigOptionInfo) -> bool {
+pub(super) fn is_reasoning(option: &SessionConfigOptionInfo) -> bool {
+    if option.category.as_deref() == Some("mode") {
+        return false;
+    }
     matches!(
         option.category.as_deref(),
         Some("thought_level" | "reasoning_effort" | "effort")
@@ -48,10 +56,10 @@ fn choices(option: &SessionConfigOptionInfo) -> Vec<&SessionConfigSelectOptionIn
     }
 }
 
-fn current(option: &SessionConfigOptionInfo) -> String {
-    match &option.kind {
-        SessionConfigKindInfo::Select(select) => select.current_value.clone(),
-        SessionConfigKindInfo::Boolean(value) => value.current_value.to_string(),
+pub(super) fn current_model(options: &[SessionConfigOptionInfo]) -> Option<&str> {
+    match &options.iter().find(|option| is_model(option))?.kind {
+        SessionConfigKindInfo::Select(select) => Some(&select.current_value),
+        SessionConfigKindInfo::Boolean(_) => None,
     }
 }
 
@@ -62,9 +70,7 @@ pub fn model_catalog(
     let Some(model) = options.iter().find(|option| is_model(option)) else {
         return Vec::new();
     };
-    let current_model = selected_model
-        .map(str::to_owned)
-        .unwrap_or_else(|| current(model));
+    let current_model = selected_model.or_else(|| current_model(options));
     let current_reasoning = options.iter().find(|option| is_reasoning(option));
     choices(model)
         .into_iter()
@@ -76,7 +82,7 @@ pub fn model_catalog(
                 .as_ref()
                 .map(|effort| effort.values.clone())
                 .or_else(|| {
-                    (choice.value == current_model)
+                    (Some(choice.value.as_str()) == current_model)
                         .then(|| {
                             current_reasoning.map(|option| {
                                 choices(option)
@@ -87,7 +93,8 @@ pub fn model_catalog(
                         })
                         .flatten()
                 }),
-            context_window: None,
+            reasoning_option_id: current_reasoning.map(|option| option.id.clone()),
+            context_window: choice.context_window,
         })
         .collect()
 }
@@ -137,6 +144,61 @@ impl ModelSelection {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct PermissionMode {
+    pub mode_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentOptions {
+    pub model_option_id: Option<String>,
+    pub models: Vec<ModelInfo>,
+    pub modes: Vec<PermissionMode>,
+}
+
+pub(super) fn permission_modes(
+    snapshot: &crate::acp::types::AgentOptionsSnapshot,
+) -> Vec<PermissionMode> {
+    if let Some(option) = snapshot.config_options.iter().find(|option| {
+        option.category.as_deref() == Some("mode")
+            && matches!(option.kind, SessionConfigKindInfo::Select(_))
+    }) {
+        return choices(option)
+            .into_iter()
+            .map(|choice| PermissionMode {
+                mode_id: choice.value.clone(),
+                name: choice.name.clone(),
+            })
+            .collect();
+    }
+    snapshot
+        .modes
+        .iter()
+        .flat_map(|legacy| &legacy.available_modes)
+        .map(|mode| PermissionMode {
+            mode_id: mode.id.clone(),
+            name: mode.name.clone(),
+        })
+        .collect()
+}
+
+pub(crate) fn validate_create_option_ids(
+    options: &[SessionConfigOptionInfo],
+    values: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let model = options.iter().find(|option| is_model(option));
+    let reasoning = options.iter().find(|option| is_reasoning(option));
+    match (model, reasoning) {
+        (Some(model), Some(reasoning)) if model.id != reasoning.id
+            && values.len() == 2 && values.contains_key(&model.id) && values.contains_key(&reasoning.id) => Ok(()),
+        _ => Err(format!(
+            "expected model option {:?} and reasoning option {:?}; query list_agent_options for this agent",
+            model.map(|option| &option.id), reasoning.map(|option| &option.id)
+        )),
+    }
+}
+
 fn available(option: &SessionConfigOptionInfo) -> String {
     match &option.kind {
         SessionConfigKindInfo::Boolean(_) => "true, false".into(),
@@ -177,7 +239,7 @@ mod tests {
         serde_json::from_value(json!([
             {"id":"provider/model", "name":"Model", "category":"model", "description":null,
              "kind":{"type":"select", "current_value":"a", "options":[
-                 {"value":"a","name":"Alpha","description":null,"reasoning_efforts":{"values":["low","high"],"recommended":"high"}},
+                 {"value":"a","name":"Alpha","description":null,"context_window":131072,"reasoning_efforts":{"values":["low","high"],"recommended":"high"}},
                  {"value":"b","name":"Beta","description":null}],"groups":[]}},
             {"id":"thinking", "name":"Thinking", "category":"thought_level", "description":null,
              "kind":{"type":"select", "current_value":"low", "options":[
@@ -195,7 +257,7 @@ mod tests {
             catalog[0].reasoning,
             Some(vec!["low".into(), "high".into()])
         );
-        assert_eq!(catalog[0].context_window, None);
+        assert_eq!(catalog[0].context_window, Some(131072));
         // A model without per-model metadata cannot borrow another model's levels.
         assert_eq!(catalog[1].reasoning, None);
     }
@@ -209,11 +271,31 @@ mod tests {
         let values = selected.resolve(&options()).unwrap();
         assert_eq!(values.get("provider/model").map(String::as_str), Some("a"));
         assert_eq!(values.get("thinking").map(String::as_str), Some("high"));
+        let options = options();
+        let catalog = model_catalog(&options, None);
+        let listed = &catalog[0];
+        let request = BTreeMap::from([
+            ("provider/model".into(), listed.slug.clone()),
+            (
+                listed.reasoning_option_id.clone().unwrap(),
+                listed.reasoning.as_ref().unwrap()[1].clone(),
+            ),
+        ]);
+        assert_eq!(request, values);
+        assert!(validate_create_option_ids(&options, &request).is_ok());
+        assert!(validate_create_option_ids(
+            &options,
+            &BTreeMap::from([
+                ("provider/model".into(), listed.slug.clone()),
+                ("mode".into(), "agent-full-access".into()),
+            ])
+        )
+        .is_err());
         let bad = ModelSelection {
             model: Some("missing".into()),
             reasoning: None,
         };
-        let error = bad.resolve(&options()).unwrap_err();
+        let error = bad.resolve(&options).unwrap_err();
         assert!(error.contains("Alpha"));
         assert!(error.contains("a"));
         assert!(error.contains("b"));

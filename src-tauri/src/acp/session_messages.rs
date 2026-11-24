@@ -43,6 +43,22 @@ fn current_permission_mode(options: &[SessionConfigOptionInfo]) -> Option<&str> 
 }
 
 impl SessionCreator {
+    pub(crate) async fn inherited_mode_id(
+        &self,
+        caller: &str,
+        agent_type: crate::models::AgentType,
+    ) -> Option<String> {
+        let state = self.manager.get_state(caller).await?;
+        let state = state.read().await;
+        (state.agent_type == agent_type)
+            .then(|| {
+                current_permission_mode(state.config_options.as_deref().unwrap_or_default())
+                    .or(state.current_mode.as_deref())
+                    .map(str::to_owned)
+            })
+            .flatten()
+    }
+
     pub async fn create(
         &self,
         caller: &str,
@@ -53,14 +69,6 @@ impl SessionCreator {
         >,
         broker: &DelegationBroker,
     ) -> Result<(i32, String), String> {
-        if let Some(key) = request.config_values.keys().find(|key| {
-            !matches!(
-                key.as_str(),
-                "model" | "reasoning_effort" | "effort" | "thought_level"
-            )
-        }) {
-            return Err(format!("unsupported create_session config option: {key}"));
-        }
         let Some((caller_state, emitter)) = self.manager.get_state_and_emitter(caller).await else {
             return Err("creator connection is unavailable".into());
         };
@@ -92,7 +100,6 @@ impl SessionCreator {
             defaults.mode_id.clone_from(&mode);
             defaults.config_values.remove("mode");
         }
-        defaults.config_values.extend(request.config_values.clone());
         let source = live_conversation(&self.db, sender)
             .await
             .map_err(|error| error.to_string())?
@@ -124,6 +131,43 @@ impl SessionCreator {
             crate::commands::acp::build_session_runtime_env(&db, agent_type, None, &self.data_dir)
                 .await
                 .map_err(|error| error.to_string())?;
+        use super::delegation::models::{is_model, validate_create_option_ids};
+        let probe = |values| {
+            self.manager.probe_agent_options(
+                agent_type,
+                Some(folder.path.clone()),
+                runtime_env.clone(),
+                values,
+            )
+        };
+        let options = probe(Default::default())
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Err(error) =
+            validate_create_option_ids(&options.config_options, &request.config_values)
+        {
+            // Some models add or replace the reasoning selector when selected.
+            // Send only the confirmed model key until both keys are known.
+            let (id, model) = options
+                .config_options
+                .iter()
+                .find(|option| is_model(option))
+                .and_then(|option| request.config_values.get_key_value(&option.id))
+                .ok_or(error)?;
+            let selected = probe(std::collections::BTreeMap::from([(
+                id.clone(),
+                model.clone(),
+            )]))
+            .await
+            .map_err(|error| error.to_string())?;
+            if selected.unapplied_config_ids.contains(id) {
+                return Err(format!(
+                    "could not select model {model:?}; query list_agent_options for this agent"
+                ));
+            }
+            validate_create_option_ids(&selected.config_options, &request.config_values)?;
+        }
+        defaults.config_values.extend(request.config_values.clone());
         let title = Some(request.title.clone());
         let conversation_id = if folder.kind == FolderKind::Chat {
             conversation_service::create_chat(&self.db, folder.id, agent_type, title, None)

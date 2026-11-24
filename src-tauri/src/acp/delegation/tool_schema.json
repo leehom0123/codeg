@@ -59,34 +59,30 @@
         },
         "model": {
           "type": "string",
-          "description": "Optional exact model slug from list_models. Overrides the agent or assistant saved model for this task."
+          "description": "Optional exact model slug from list_agent_options. Overrides the agent or assistant saved model for this task."
         },
         "reasoning": {
           "type": "string",
-          "description": "Optional reasoning level from list_models for the chosen model. Overrides the saved level for this task; unsupported values are rejected before the task starts."
+          "description": "Optional reasoning level from list_agent_options for the chosen model. Overrides the saved level for this task; unsupported values are rejected before the task starts."
         }
       }
     }
   },
   {
-    "name": "list_models",
-    "description": "List the models offered by a local agent runtime, with their exact slugs, display names, reasoning levels and context windows when known. Use these values for delegate_to_agent. Pass model to load model-dependent reasoning choices. null means the runtime did not advertise that metadata.",
+    "name": "list_agent_options",
+    "description": "List the models, model-specific reasoning levels, and permission modes for a local agent in one call. Use model_option_id, model slug, reasoning_option_id, reasoning value, and mode_id as inputs to create_session. For the same agent type use inherited_mode_id. The runtime may omit some metadata. For delegate_to_agent, use the model slug and reasoning value.",
     "inputSchema": {
       "type": "object",
-      "required": [
-        "agent_type"
-      ],
+      "required": ["agent_type"],
       "properties": {
         "agent_type": {
           "type": "string",
           "description": "Agent slug, including a configured custom agent."
-        },
-        "model": {
-          "type": "string",
-          "description": "Optional exact model slug to inspect its reasoning choices."
         }
-      }
-    }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "readOnlyHint": true }
   },
   {
     "name": "get_current_session",
@@ -171,15 +167,10 @@
         },
         "config_values": {
           "type": "object",
-          "propertyNames": { "enum": ["model", "reasoning_effort", "effort", "thought_level"] },
           "additionalProperties": { "type": "string", "pattern": "\\S" },
-          "required": ["model"],
-          "anyOf": [
-            { "required": ["reasoning_effort"] },
-            { "required": ["effort"] },
-            { "required": ["thought_level"] }
-          ],
-          "description": "Specify model and the reasoning option ID offered by the target agent. For Codex, use reasoning_effort. The first message is sent only if the supplied settings take effect."
+          "minProperties": 2,
+          "maxProperties": 2,
+          "description": "Use the model_option_id and reasoning_option_id from list_agent_options as keys. Use the chosen model slug and reasoning level as their values. The first message is sent only if the settings take effect."
         }
       }
     }

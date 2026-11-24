@@ -34,8 +34,8 @@ const NAV_ITEMS_KEY = "workspace:sidebar-nav-items"
 describe("normalizeSectionOrder", () => {
   it("passes a complete order through unchanged", () => {
     expect(
-      normalizeSectionOrder(["recent", "chats", "assistants", "folders"])
-    ).toEqual(["recent", "chats", "assistants", "folders"])
+      normalizeSectionOrder(["recent", "chats", "assistants", "folders", "btw"])
+    ).toEqual(["recent", "chats", "assistants", "folders", "btw"])
   })
 
   it("puts the assistants right above the folders in a store from before them", () => {
@@ -46,12 +46,14 @@ describe("normalizeSectionOrder", () => {
       "chats",
       "assistants",
       "folders",
+      "btw",
     ])
     expect(normalizeSectionOrder(["folders", "chats", "recent"])).toEqual([
       "assistants",
       "folders",
       "chats",
       "recent",
+      "btw",
     ])
   })
 
@@ -71,7 +73,7 @@ describe("normalizeSectionOrder", () => {
   it("drops unknown entries and repeats", () => {
     expect(
       normalizeSectionOrder(["recent", "bogus", "recent", 7, null, "chats"])
-    ).toEqual(["recent", "chats", "assistants", "folders"])
+    ).toEqual(["recent", "chats", "assistants", "folders", "btw"])
   })
 
   it("migrates the legacy two-way strings, preserving the user's choice", () => {
@@ -136,20 +138,22 @@ describe("section-order persistence", () => {
   beforeEach(() => localStorage.clear())
 
   it("round-trips through localStorage", () => {
-    saveSectionOrder(["recent", "folders", "assistants", "chats"])
+    saveSectionOrder(["recent", "folders", "assistants", "chats", "btw"])
     expect(loadSectionOrder()).toEqual([
       "recent",
       "folders",
       "assistants",
       "chats",
+      "btw",
     ])
   })
 
-  it("defaults to Assistants → Folders → Chat → Recent with nothing stored", () => {
+  it("defaults to Assistants → Folders → Chat → Btw → Recent with nothing stored", () => {
     expect(loadSectionOrder()).toEqual([
       "assistants",
       "folders",
       "chats",
+      "btw",
       "recent",
     ])
   })
@@ -163,6 +167,7 @@ describe("section-order persistence", () => {
       "assistants",
       "folders",
       "recent",
+      "btw",
     ])
   })
 

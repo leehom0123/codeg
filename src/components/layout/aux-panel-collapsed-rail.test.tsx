@@ -62,6 +62,7 @@ const BUILT_IN = [
   "Commits",
   "Automations",
   "To-dos",
+  "Project Knowledge",
   "Issues",
   "Pull requests",
 ]
@@ -134,6 +135,7 @@ describe("AuxPanelCollapsedRail", () => {
     renderFold()
     expect(foldTabs()).toEqual([
       "To-dos",
+      "Project Knowledge",
       "Files",
       "Session Details",
       "Issues",

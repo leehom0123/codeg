@@ -1061,6 +1061,8 @@ describe("buildRows", () => {
 
 describe("buildRows — the personal assistants", () => {
   const base = {
+    btwConversations: [],
+    btwExpanded: false,
     pinned: [],
     pinnedExpanded: true,
     orderedFolderIds: [10],

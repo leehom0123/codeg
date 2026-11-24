@@ -1,4 +1,4 @@
-name: Sync upstream release
+name: Sync upstream main
 
 on:
   schedule:
@@ -23,29 +23,30 @@ jobs:
         with:
           ref: release/custom
           fetch-depth: 0
-      - name: Merge upstream main after a new release
+      - name: Merge upstream main
         id: merge
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          # Follow upstream main as it moves, not only when upstream cuts a
+          # release: each tick brings custom up to whatever main holds, so
+          # custom builds always sit on the newest upstream code (the trade —
+          # a build can land on an unreleased middle point — is accepted).
           upstream=spacering-net/codeg
-          tag="$(gh api "repos/$upstream/releases/latest" --jq .tag_name)"
           git fetch --no-tags "https://github.com/$upstream.git" \
-            refs/heads/main:refs/remotes/upstream/main "refs/tags/$tag:refs/upstream/releases/$tag"
-          published_commit="$(git rev-parse "refs/upstream/releases/$tag^{commit}")"
-          git merge-base --is-ancestor "$published_commit" upstream/main
+            refs/heads/main:refs/remotes/upstream/main
           git fetch origin refs/heads/main:refs/remotes/origin/main
+          # The fork-main push below only fast-forwards while our main sits
+          # inside upstream's history; a divergence must fail loudly here.
           git merge-base --is-ancestor origin/main upstream/main
           git push origin refs/remotes/upstream/main:refs/heads/main
-          if git merge-base --is-ancestor "$published_commit" HEAD; then
-            echo "Upstream release $tag is already included."
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Upstream main is already included."
             exit 0
           fi
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git merge --no-ff -m "Merge upstream main after $tag" upstream/main
+          git merge --no-ff -m "Merge upstream main" upstream/main
           git push origin HEAD:refs/heads/release/custom
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 

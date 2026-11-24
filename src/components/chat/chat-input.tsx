@@ -8,7 +8,6 @@ import type {
   ConnectionStatus,
   PromptCapabilitiesInfo,
   PromptDraft,
-  CodexTurnSettings,
   PromptInputBlock,
   SessionConfigOptionInfo,
   SessionModeInfo,
@@ -86,7 +85,7 @@ interface ChatInputProps {
   onSteer?: (
     text: string,
     blocks?: PromptInputBlock[],
-    turnSettings?: CodexTurnSettings
+    draft?: PromptDraft
   ) => Promise<void>
   /** Which channel `onSteer` rides (`useSessionFeedback().channel`); picks
    *  the composer's honest copy. See `MessageInput`. */

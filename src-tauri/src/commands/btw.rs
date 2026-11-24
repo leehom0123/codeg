@@ -162,7 +162,7 @@ pub async fn btw_create_core(
     if let Err(e) = manager
         .send_prompt_linked_with_suffix(
             db,
-            &spawn.connection_id,
+            &spawn,
             vec![PromptInputBlock::Text { text: question }],
             Some(parent.folder_id),
             Some(row.id),
@@ -180,7 +180,7 @@ pub async fn btw_create_core(
     emit_conversation_upsert(emitter, &db.conn, row.id).await;
     Ok(BtwCreateResult {
         conversation_id: row.id,
-        connection_id: spawn.connection_id,
+        connection_id: spawn,
     })
 }
 

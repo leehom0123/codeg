@@ -62,7 +62,7 @@
   },
   {
     "name": "list_agent_options",
-    "description": "List the models, model-specific reasoning levels, and permission modes for a local agent in one call. Use model_option_id, model slug, reasoning_option_id, reasoning value, and mode_id as inputs to create_session. For the same agent type use inherited_mode_id. The runtime may omit some metadata. For delegate_to_agent, use the model slug and reasoning value.",
+    "description": "List the models, model-specific reasoning levels, and permission modes for a local agent in one call. Use model_option_id, model slug, reasoning_option_id, reasoning value, and mode_id as inputs to create_session. For the same agent type use inherited_mode_id. The runtime may omit some metadata.",
     "inputSchema": {
       "type": "object",
       "required": ["agent_type"],

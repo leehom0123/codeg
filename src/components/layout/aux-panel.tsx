@@ -6,6 +6,8 @@ import {
   type AuxPanelTab,
 } from "@/contexts/aux-panel-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
+import { useTabStore } from "@/contexts/tab-context"
+import { useActiveProjectFolderId } from "@/hooks/use-active-project-folder"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
@@ -50,6 +52,16 @@ export function AuxPanel() {
   const { isOpen, activeTab, setActiveTab, setOpen } = useAuxPanelContext()
   const { activeFolderId } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
+  const projectFolderId = useActiveProjectFolderId()
+  const sessionTabId = useTabStore(
+    (state) =>
+      state.tabs.find(
+        (tab) =>
+          tab.id === state.activeTabId &&
+          tab.kind === "conversation" &&
+          tab.folderId === activeFolderId
+      )?.id
+  )
   const isMobile = useIsMobile()
   const { isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()

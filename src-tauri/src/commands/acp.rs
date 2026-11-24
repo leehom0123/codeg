@@ -12489,7 +12489,7 @@ pub(crate) async fn spawn_with_conversation_selection(
     conversation_id: Option<i32>,
     client_mode_id: Option<String>,
     client_config_values: BTreeMap<String, String>,
-) -> Result<crate::acp::manager::SpawnOutcome, AcpError> {
+) -> Result<String, AcpError> {
     let spawned = spawn_and_bind_conversation_selection(
         manager,
         db,
@@ -12505,7 +12505,7 @@ pub(crate) async fn spawn_with_conversation_selection(
     )
     .await?;
     spawned.bound?;
-    Ok(spawned.outcome)
+    Ok(spawned.outcome.connection_id)
 }
 
 /// A spawned connection, and whether binding it to its conversation's row

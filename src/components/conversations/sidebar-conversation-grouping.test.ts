@@ -2237,6 +2237,8 @@ describe("buildRows Recent time grouping", () => {
     foldersExpanded: false,
     chatConversations: [],
     chatsExpanded: false,
+    btwConversations: [],
+    btwExpanded: false,
     recentExpanded: true,
     showRecent: true,
     currentTime: now,

@@ -136,7 +136,7 @@ pub async fn btw_create_core(
             )));
         }
     };
-    let spawn = crate::commands::acp::spawn_with_conversation_selection(
+    let connection_id = crate::commands::acp::spawn_with_conversation_selection(
         manager,
         &db.conn,
         parent.agent_type,
@@ -151,8 +151,8 @@ pub async fn btw_create_core(
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(format!("btw child connection failed: {e}")));
-    let spawn = match spawn {
-        Ok(spawn) => spawn,
+    let connection_id = match connection_id {
+        Ok(connection_id) => connection_id,
         Err(e) => {
             roll_back_btw_row(db, manager, emitter, row.id).await;
             return Err(e);
@@ -162,7 +162,7 @@ pub async fn btw_create_core(
     if let Err(e) = manager
         .send_prompt_linked_with_suffix(
             db,
-            &spawn.connection_id,
+            &connection_id,
             vec![PromptInputBlock::Text { text: question }],
             Some(parent.folder_id),
             Some(row.id),
@@ -180,7 +180,7 @@ pub async fn btw_create_core(
     emit_conversation_upsert(emitter, &db.conn, row.id).await;
     Ok(BtwCreateResult {
         conversation_id: row.id,
-        connection_id: spawn.connection_id,
+        connection_id,
     })
 }
 

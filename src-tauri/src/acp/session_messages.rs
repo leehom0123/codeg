@@ -652,7 +652,7 @@ async fn activate_recipient(
     )
     .await
     .map_err(|error| error.to_string())?;
-    let connection = outcome.connection_id;
+    let connection = outcome.outcome.connection_id;
     let ready: Result<(), String> = async {
         outcome.bound.map_err(|error| error.to_string())?;
         manager
@@ -673,7 +673,7 @@ async fn activate_recipient(
     }
     .await;
     if let Err(error) = ready {
-        if !outcome.reused {
+        if !outcome.outcome.reused {
             let _ = manager.disconnect(&connection).await;
         }
         return Err(error);

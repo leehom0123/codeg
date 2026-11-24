@@ -10257,5 +10257,20 @@
     "btw": {
       "unsupportedAgent": "Dieser Agent unterstützt keine Nebenfragen (Session-Fork und Resume erforderlich)."
     }
+  },
+  "SessionDigest": {
+    "title": "Sitzungsübersicht",
+    "now": "In Bearbeitung",
+    "news": "Neuigkeiten",
+    "needsYou": "Antwort erforderlich",
+    "suggestions": "Vorschläge",
+    "recommended": "Empfohlen",
+    "dismiss": "{title} ablehnen",
+    "updatedAt": "Aktualisiert {time}",
+    "pendingCount": "{count} Antworten ausstehend",
+    "inProgress": "In Bearbeitung",
+    "answerWhenReady": "Antworten sind möglich, wenn die Sitzung verbunden und die Nachrichtenwarteschlange leer ist.",
+    "sendFailed": "Die Antwort konnte nicht gesendet werden. Bitte erneut versuchen.",
+    "actionFailed": "Die Aktion konnte nicht gespeichert werden."
   }
 }

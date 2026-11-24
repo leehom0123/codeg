@@ -42,9 +42,39 @@
         "working_dir": {
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+        },
+        "notify_mode": {
+          "type": "string",
+          "enum": [
+            "poll",
+            "deliver"
+          ],
+          "default": "poll",
+          "description": "poll (default): collect the result with get_delegation_status. deliver: Codeg queues the first completed turn back into this conversation, waking it when offline. After starting your independent tasks, finish your current turn and wait for their messages instead of polling; status/wait still work. Requires session messaging."
+        },
+        "follow": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also deliver results of later turns in this child conversation, even after reconnects. This subscription does not keep its process running. Independent of notify_mode, which controls only the first turn. If reply_back and follow both target you for the same turn, Codeg sends one result. Requires session messaging."
         }
       }
     }
+  },
+  {
+    "name": "list_agent_options",
+    "description": "List the models, model-specific reasoning levels, and permission modes for a local agent in one call. Use model_option_id, model slug, reasoning_option_id, reasoning value, and mode_id as inputs to create_session. For the same agent type use inherited_mode_id. The runtime may omit some metadata. For delegate_to_agent, use the model slug and reasoning value.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["agent_type"],
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "description": "Agent slug, including a configured custom agent."
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "readOnlyHint": true }
   },
   {
     "name": "get_current_session",
@@ -71,7 +101,7 @@
   },
   {
     "name": "create_session",
-    "description": "Create an independent Codeg conversation. Specify a title, first message, model, reasoning setting, and permission mode. By default it uses the current conversation's agent type and folder. Use this when the user asks to create separate conversations, have multiple sessions chat, or take turns continuing a story. Returns conversation_id after starting the first message. The conversation has its own history and stays available after the creator finishes. The first answer is sent back automatically. Use send_to_session with reply=true for later messages. Finish your turn after creating or sending so the automatic answers can arrive as visible incoming messages and start the next turn; do not poll get_session_info for answers.",
+    "description": "Create an independent Codeg conversation. Specify a title, first message, model, reasoning setting, and permission mode. By default it uses the current conversation's agent type and folder. Use this when the user asks to create separate conversations, have multiple sessions chat, or take turns continuing a story. Returns conversation_id after starting the first message. The conversation has its own history and stays available after the creator finishes. It is automatically linked as an independent collaborator of the creator. The first answer is sent back automatically. Use send_to_session with reply=true for later messages. Finish your turn after creating or sending so the automatic answers can arrive as visible incoming messages and start the next turn; do not poll get_session_info for answers.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -129,18 +159,29 @@
         },
         "config_values": {
           "type": "object",
-          "propertyNames": { "enum": ["model", "reasoning_effort", "effort", "thought_level"] },
           "additionalProperties": { "type": "string", "pattern": "\\S" },
-          "required": ["model"],
-          "anyOf": [
-            { "required": ["reasoning_effort"] },
-            { "required": ["effort"] },
-            { "required": ["thought_level"] }
-          ],
-          "description": "Specify model and the reasoning option ID offered by the target agent. For Codex, use reasoning_effort. The first message is sent only if the supplied settings take effect."
+          "minProperties": 2,
+          "maxProperties": 2,
+          "description": "Use the model_option_id and reasoning_option_id from list_agent_options as keys. Use the chosen model slug and reasoning level as their values. The first message is sent only if the settings take effect."
         }
       }
     }
+  },
+  {
+    "name": "stop_session",
+    "description": "Request that the active turn stop in your own Codeg session or a direct delegation child. Uses the same cancellation as the Stop button. Keeps the conversation and queued messages. Returns idle if there is no active turn. Only call when asked to stop the work.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Codeg conversation ID. Omit to stop your own session."
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "destructiveHint": true }
   },
   {
     "name": "send_to_session",
@@ -294,8 +335,25 @@
     }
   },
   {
+    "name": "rename_session",
+    "description": "Rename your current Codeg conversation or one of your direct delegated child conversations. Omit session_id to rename yourself. The title is locked against later automatic title refreshes and imports.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["title"],
+      "properties": {
+        "session_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Codeg conversation ID. Defaults to your current conversation. Only your own or a direct child conversation is allowed."
+        },
+        "title": { "type": "string", "minLength": 1, "description": "The new conversation title." }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "get_session_info",
-    "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
+    "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). Returns up to 200 direct delegation children (session_id, task_id, status), even when the transcript is unavailable. children_truncated indicates additional children. Use get_delegation_status for detailed task reports. Independent collaboration sessions created by this session are listed in collaborators. The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -313,6 +371,48 @@
         }
       }
     }
+  },
+  {
+    "name": "read_session_history",
+    "description": "Read older context from a codeg session without changing it. session_id is the number from codeg://session/<id>. Returns the newest matching turns in chronological order, with original transcript IDs. Pass oldest_id as before for the next older page; before is exclusive. query is a case-insensitive literal substring over full text/thinking/errors (also tool names/input/output previews when include_tools=true). An unknown before returns an explanation instead of restarting. IDs remain usable while the underlying transcript preserves them; rewriting/compaction can invalidate them. No images or raw tool payloads are returned. The full transcript is parsed on each read, subject to the same concurrency and timeout limits as get_session_info.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "integer",
+          "description": "Codeg conversation ID."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 20,
+          "description": "Maximum returned turns, capped at 200."
+        },
+        "before": {
+          "type": "string",
+          "description": "Exclusive original turn ID from oldest_id. Omit for the newest page."
+        },
+        "query": {
+          "type": "string",
+          "description": "Optional case-insensitive literal substring. Empty matches all turns."
+        },
+        "include_tools": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include tool names and recorded input/output previews; image payloads remain excluded."
+        },
+        "max_chars": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 16000,
+          "description": "Character budget for the serialized history envelope, capped at 16000. JSON escaping counts. A long newest turn may be clipped (previews omitted first); truncated marks clipping or omitted older matches. If the budget cannot fit response/turn metadata, returns no turns and a note; that fixed metadata may exceed the requested budget. This bounds returned content, not transcript parsing or the MCP protocol wrapper."
+        }
+      }
+    },
+    "annotations": { "readOnlyHint": true }
   },
   {
     "name": "create_automation",

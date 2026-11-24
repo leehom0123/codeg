@@ -2069,6 +2069,24 @@ impl ConnectionManager {
         // for a prompt that never reached the agent, so without this the
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
+        if let Some(cid) = conversation_id_for_status {
+            let input_id = user_message
+                .as_ref()
+                .and_then(|(id, _)| id.strip_prefix(super::session_messages::PROMPT_ID_PREFIX));
+            let policy = state_arc.read().await.pending_delivery.clone();
+            let turn_id = crate::db::service::turn_delivery_service::admit(
+                &db.conn,
+                cid,
+                input_id,
+                policy.as_ref(),
+            )
+            .await
+            .map_err(|error| AcpError::protocol(error.to_string()))?;
+            let mut state = state_arc.write().await;
+            state.pending_turn_id = Some(turn_id);
+            state.turn_database = Some(db.conn.clone());
+            state.pending_delivery = None;
+        }
         match self
             .send_prompt_inner(conn_id, blocks, user_message, internal_suffix)
             .await
@@ -2125,6 +2143,19 @@ impl ConnectionManager {
                 Ok(conversation_id_for_status)
             }
             Err(send_err) => {
+                let rejected_turn = state_arc.write().await.pending_turn_id.take();
+                if let Some(turn_id) = rejected_turn {
+                    if let Err(error) = crate::db::service::turn_delivery_service::complete(
+                        &db.conn,
+                        &turn_id,
+                        "send_failed",
+                        "",
+                    )
+                    .await
+                    {
+                        tracing::error!(%error, "could not persist rejected turn");
+                    }
+                }
                 if let Some(cid) = conversation_id_for_status {
                     match conversation_service::update_status(
                         &db.conn,
@@ -2389,6 +2420,31 @@ impl ConnectionManager {
         reply_rx
             .await
             .map_err(|_| AcpError::protocol("Async task stop reply channel closed".to_string()))?
+    }
+
+    /// Stop an active, already-bound conversation without waking an idle one.
+    pub(crate) async fn cancel_conversation_turn(
+        &self,
+        db: &DatabaseConnection,
+        conversation_id: i32,
+    ) -> Result<bool, AcpError> {
+        let Some(conn_id) = self.find_connection_by_conversation_id(conversation_id).await else {
+            return Ok(false);
+        };
+        let lock = self.clone_prompt_lock(&conn_id).await?;
+        let _guard = lock.lock().await;
+        let Some(state) = self.get_state(&conn_id).await else {
+            return Ok(false);
+        };
+        let state = state.read().await;
+        if state.conversation_id != Some(conversation_id)
+            || !(state.turn_in_flight || state.status == ConnectionStatus::Prompting)
+        {
+            return Ok(false);
+        }
+        drop(state);
+        self.cancel(db, &conn_id).await?;
+        Ok(true)
     }
 
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
@@ -4067,7 +4123,7 @@ impl ConnectionManager {
         &self,
         conn_id: &str,
         text: String,
-        message_result: super::session_messages::TurnSender,
+        message_delivery: super::session_messages::SessionMessageDelivery,
     ) -> Result<SteerOutcome, AcpError> {
         if text.chars().count() > MAX_FEEDBACK_CHARS {
             return Err(AcpError::FeedbackDisabled);
@@ -4081,9 +4137,17 @@ impl ConnectionManager {
         if !state.read().await.native_steering_available {
             return Err(AcpError::FeedbackDisabled);
         }
-        Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, None, Some(message_result))
-            .await
-            .map(|(_, outcome)| outcome)
+        Self::submit_feedback_native(
+            conn_id,
+            state,
+            cmd_tx,
+            emitter,
+            text,
+            None,
+            Some(message_delivery),
+        )
+        .await
+        .map(|(_, outcome)| outcome)
     }
 
     async fn submit_feedback_native(
@@ -4093,7 +4157,7 @@ impl ConnectionManager {
         emitter: EventEmitter,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
-        message_result: Option<super::session_messages::TurnSender>,
+        message_delivery: Option<super::session_messages::SessionMessageDelivery>,
     ) -> Result<(FeedbackItem, SteerOutcome), AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
@@ -4204,7 +4268,7 @@ impl ConnectionManager {
                 cmd_tx
                     .send(ConnectionCommand::Steer {
                         blocks: wire_blocks,
-                        message_result,
+                        message_delivery,
                         reply: reply_tx,
                     })
                     .await
@@ -5085,6 +5149,20 @@ pub struct ConnectionManagerSpawner {
 
 #[async_trait::async_trait]
 impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpawner {
+    async fn configure_delivery(
+        &self,
+        connection_id: &str,
+        policy: crate::db::service::turn_delivery_service::DeliveryPolicy,
+    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
+        let state = self.manager.get_state(connection_id).await.ok_or_else(|| {
+            crate::acp::delegation::spawner::SpawnerError::Spawn(
+                "child connection is unavailable".into(),
+            )
+        })?;
+        state.write().await.pending_delivery = Some(policy);
+        Ok(())
+    }
+
     async fn spawn(
         &self,
         parent_connection_id: &str,

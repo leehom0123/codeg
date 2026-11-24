@@ -12564,7 +12564,11 @@ pub(crate) async fn spawn_and_bind_conversation_selection(
     let bound = match selection.row_id {
         Some(row_id) => {
             manager
-                .bind_selection_conversation(&outcome.connection_id, row_id, selection.composer_mode_id)
+                .bind_selection_conversation(
+                    &outcome.connection_id,
+                    row_id,
+                    selection.composer_mode_id,
+                )
                 .await
         }
         None => Ok(()),

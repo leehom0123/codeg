@@ -7,6 +7,7 @@
 //! [`DelegationBroker`]. The listener is the boundary between the wire and
 //! the broker, plus the place where the per-launch token policy is enforced.
 
+use super::transport::BrokerListAgentOptionsRequest;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,15 +30,14 @@ use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerBrowserActRequest,
     BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
     BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
-    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerComputerActRequest,
-    BrokerComputerAppsRequest, BrokerComputerCaptureRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest,
-    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCommitFeedbackRequest,
-    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
-    BrokerResultSchemaRequest, BrokerResumeTaskRequest, BrokerSessionRequest,
-    BrokerStatusRequest, BrokerSubmitResultRequest, BrokerTaskCompleteRequest,
-    BrokerTaskProgressRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest,
+    BrokerComputerWindowsRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
+    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRenameSessionRequest,
+    BrokerRequest, BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest,
+    BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
+    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::delegation::assistants::assistant_not_found_message;
 use crate::acp::delegation::types::{
@@ -50,7 +50,7 @@ use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::scratch_dir::{is_inside_sweep_scope, SUN_PATH_CAP};
 use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
 use crate::acp::result_tool::ResultToolAccess;
-use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
+use crate::acp::session_info::{SessionHistory, SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use serde_json::Value;
 
@@ -489,6 +489,9 @@ impl DelegationListener {
             BrokerMessage::CreateSession(req) => BrokerResponse {
                 outcome: self.process_create_session(req).await,
             },
+            BrokerMessage::ListAgentOptions(req) => BrokerResponse {
+                outcome: self.process_list_agent_options(req).await,
+            },
             BrokerMessage::SessionMessage(req) => BrokerResponse {
                 outcome: self.process_session_message(req).await,
             },
@@ -589,6 +592,24 @@ impl DelegationListener {
                 };
                 write_frame(conn, &resp).await?;
                 return Ok(());
+            }
+            BrokerMessage::StopSession(req) => BrokerResponse {
+                outcome: self.process_stop_session(req).await,
+            },
+            BrokerMessage::RenameSession(req) => BrokerResponse {
+                outcome: self.process_rename_session(req).await,
+            },
+            BrokerMessage::SessionHistory(req) => {
+                let history = if self.tokens.lookup(&req.token).await.is_some() {
+                    self.session_info
+                        .read_history(req.session_id, req.options)
+                        .await
+                } else {
+                    SessionHistory::not_found(req.session_id)
+                };
+                BrokerResponse {
+                    outcome: serde_json::to_value(history).map_err(std::io::Error::other)?,
+                }
             }
             BrokerMessage::SessionInfo(req) => {
                 // Read-only resolution (DB + a bounded transcript parse). No
@@ -868,6 +889,43 @@ impl DelegationListener {
             .await
     }
 
+    async fn process_list_agent_options(&self, req: BrokerListAgentOptionsRequest) -> Value {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return serde_json::json!({"error": "invalid token"});
+        };
+        if entry.agent_hosts_tools {
+            return serde_json::json!({"error": "tool is unavailable for this agent"});
+        }
+        let Some(agent_type) = crate::models::AgentType::from_wire(&req.agent_type) else {
+            return serde_json::json!({"error": "invalid agent_type"});
+        };
+
+        let config = self.broker.config_snapshot().await;
+        if !config.enabled && !config.session_messaging_enabled {
+            return serde_json::json!({"error": "delegation and session messaging are disabled"});
+        }
+        let Some(creator) = self.session_creator.get() else {
+            return serde_json::json!({"error": "session tools are unavailable"});
+        };
+        let inherited_mode_id = creator.inherited_mode_id(&entry.parent_connection_id, agent_type).await;
+        let preferences = config.agent_defaults.get(&agent_type)
+            .map(|defaults| defaults.config_values.clone()).unwrap_or_default();
+        match creator.list_agent_options(
+            agent_type,
+            Some(entry.working_dir.to_string_lossy().into_owned()),
+            preferences,
+        ).await {
+            Ok(options) => serde_json::json!({
+                "agent_type": req.agent_type,
+                "model_option_id": options.model_option_id,
+                "models": options.models,
+                "modes": options.modes,
+                "inherited_mode_id": inherited_mode_id,
+            }),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
     async fn process_create_session(
         &self,
         req: super::transport::BrokerCreateSessionRequest,
@@ -916,7 +974,20 @@ impl DelegationListener {
         match crate::db::service::session_message_service::enqueue(
             db, sender, req.conversation_id, req.message, req.mode, req.reply,
         ).await {
-            Ok(message_id) => serde_json::json!({"message_id": message_id}),
+            Ok(message_id) => {
+                use crate::db::entities::session_message;
+                use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+                match session_message::Entity::find()
+                    .filter(session_message::Column::MessageId.eq(message_id.clone()))
+                    .one(db)
+                    .await
+                {
+                    Ok(Some(row)) => {
+                        serde_json::json!({"message_id": message_id, "status": row.status, "error": row.error})
+                    }
+                    _ => serde_json::json!({"message_id": message_id}),
+                }
+            }
             Err(error) => serde_json::json!({"error": error.to_string()}),
         }
     }
@@ -1057,6 +1128,59 @@ impl DelegationListener {
         self.broker
             .cancel_by_external_handle(&cancel.external_handle, reason)
             .await;
+    }
+
+    async fn session_control_target(
+        &self,
+        token: &str,
+        requested: Option<i32>,
+    ) -> Result<(i32, i32), &'static str> {
+        let entry = self.tokens.lookup(token).await
+            .filter(|entry| !entry.agent_hosts_tools)
+            .ok_or("Session control is unavailable")?;
+        let caller_id = self.parent_lookup.current_conversation_id(&entry.parent_connection_id)
+            .await.ok_or("Caller has no active conversation")?;
+        Ok((caller_id, requested.unwrap_or(caller_id)))
+    }
+
+    async fn process_stop_session(&self, req: super::transport::BrokerStopSessionRequest) -> Value {
+        let (caller_id, session_id) = match self.session_control_target(&req.token, req.session_id).await {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        let Some(creator) = self.session_creator.get() else {
+            return serde_json::json!({"error": "Session control is unavailable"});
+        };
+        if !self.broker.config_snapshot().await.session_messaging_enabled {
+            return serde_json::json!({"error": "Session messaging is disabled"});
+        }
+        if let Err(error) = crate::commands::session_info::authorize_session_control(
+            &creator.db, caller_id, session_id,
+        ).await {
+            return serde_json::json!({"error": error});
+        }
+        match creator.manager.cancel_conversation_turn(&creator.db, session_id).await {
+            Ok(requested) => serde_json::json!({
+                "session_id": session_id,
+                "status": if requested { "stop_requested" } else { "idle" },
+            }),
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    async fn process_rename_session(&self, req: BrokerRenameSessionRequest) -> Value {
+        let (caller_id, session_id) = match self.session_control_target(&req.token, req.session_id).await {
+            Ok(ids) => ids,
+            Err(error) => return serde_json::json!({"error": error}),
+        };
+        match self
+            .session_info
+            .rename(caller_id, session_id, req.title.clone())
+            .await
+        {
+            Ok(()) => serde_json::json!({"session_id": session_id, "title": req.title.trim()}),
+            Err(error) => serde_json::json!({"error": error}),
+        }
     }
 
     /// Validate the token and resolve the `get_session_info` target. An invalid
@@ -1477,6 +1601,26 @@ impl DelegationListener {
             .clone()
             .or_else(|| Some(entry.working_dir.to_string_lossy().to_string()));
 
+        let notify_mode = match req.input.get("notify_mode") {
+            None | Some(Value::Null) => "poll".to_owned(),
+            Some(Value::String(value)) if matches!(value.as_str(), "poll" | "deliver") => {
+                value.clone()
+            }
+            _ => {
+                return report_failed("invalid_notify_mode", "notify_mode must be poll or deliver")
+            }
+        };
+        let follow = match req.input.get("follow") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return report_failed("invalid_follow", "follow must be a boolean"),
+        };
+        if (notify_mode == "deliver" || follow) && entry.agent_hosts_tools {
+            return report_failed(
+                "delivery_unavailable",
+                "automatic delivery is unavailable for this agent",
+            );
+        }
         let delegation_req = DelegationRequest {
             parent_connection_id: req.parent_connection_id,
             parent_conversation_id,
@@ -1488,7 +1632,9 @@ impl DelegationListener {
             external_handle: req.external_handle,
             assistant,
         };
-        self.broker.start_delegation(delegation_req).await
+        self.broker
+            .start_delegation_with_delivery(delegation_req, notify_mode, follow)
+            .await
     }
 
     async fn assistant_not_found(&self, asked: &str) -> DelegationTaskReport {
@@ -2040,9 +2186,23 @@ mod tests {
     struct StubSessionInfo {
         known: std::collections::HashSet<i32>,
         calls: tokio::sync::Mutex<Vec<(i32, u32)>>,
+        renames: tokio::sync::Mutex<Vec<(i32, i32, String)>>,
     }
     #[async_trait]
     impl SessionInfoAccess for StubSessionInfo {
+        async fn rename(
+            &self,
+            caller_id: i32,
+            session_id: i32,
+            title: String,
+        ) -> Result<(), String> {
+            self.renames
+                .lock()
+                .await
+                .push((caller_id, session_id, title));
+            Ok(())
+        }
+
         async fn resolve(&self, session_id: i32, max_messages: u32) -> SessionInfo {
             self.calls.lock().await.push((session_id, max_messages));
             if self.known.contains(&session_id) {
@@ -2054,6 +2214,22 @@ mod tests {
                 }
             } else {
                 SessionInfo::not_found(session_id)
+            }
+        }
+
+        async fn read_history(
+            &self,
+            session_id: i32,
+            options: crate::acp::session_info::SessionHistoryOptions,
+        ) -> SessionHistory {
+            let info = self.resolve(session_id, options.limit).await;
+            SessionHistory {
+                found: info.found,
+                session_id,
+                oldest_id: options.before,
+                truncated: options.include_tools,
+                note: options.query,
+                ..Default::default()
             }
         }
     }
@@ -3236,6 +3412,109 @@ mod tests {
         // The Feedback arm is READ-ONLY — it does NOT commit (delivery is
         // committed later, by the companion's CommitFeedback).
         assert!(feedback.committed.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rename_session_uses_authenticated_caller_and_blocks_host_tools() {
+        let tokens = Arc::new(TokenRegistry::default());
+        for (token, agent_hosts_tools) in [("allowed", false), ("host", true)] {
+            tokens
+                .register(
+                    token.into(),
+                    TokenEntry {
+                        agent_hosts_tools,
+                        parent_connection_id: "parent-conn".into(),
+                        working_dir: PathBuf::from("/tmp"),
+                    },
+                )
+                .await;
+        }
+        let access = Arc::new(StubSessionInfo::default());
+        let listener = make_session_listener(tokens, access.clone());
+        for (token, session_id, allowed) in [
+            ("invalid", None, false),
+            ("host", Some(42), false),
+            ("allowed", None, true),
+            ("allowed", Some(42), true),
+        ] {
+            let (mut client, mut server) = duplex(8 * 1024);
+            let listener = listener.clone();
+            let task = tokio::spawn(async move {
+                listener.serve_one(&mut server).await.unwrap();
+            });
+            write_frame(
+                &mut client,
+                &BrokerMessage::RenameSession(BrokerRenameSessionRequest {
+                    token: token.into(),
+                    session_id,
+                    title: "Chosen".into(),
+                }),
+            )
+            .await
+            .unwrap();
+            let response: BrokerResponse = read_frame(&mut client).await.unwrap();
+            task.await.unwrap();
+            assert_eq!(response.outcome.get("error").is_none(), allowed);
+            if allowed {
+                assert_eq!(response.outcome["session_id"], session_id.unwrap_or(1));
+            }
+        }
+        assert_eq!(
+            *access.renames.lock().await,
+            vec![(1, 1, "Chosen".to_owned()), (1, 42, "Chosen".to_owned()),]
+        );
+    }
+
+    #[tokio::test]
+    async fn history_authenticates_before_lookup_and_preserves_options() {
+        let session_info = Arc::new(StubSessionInfo {
+            known: std::collections::HashSet::from([42]),
+            ..Default::default()
+        });
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    agent_hosts_tools: false,
+                    parent_connection_id: "parent".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        let listener = make_session_listener(tokens, session_info.clone());
+        for (token, found) in [("invalid", false), ("tok", true)] {
+            let (mut client, mut server) = duplex(8 * 1024);
+            let listener = listener.clone();
+            let server_task = tokio::spawn(async move {
+                listener.serve_one(&mut server).await.unwrap();
+            });
+            let msg = BrokerMessage::SessionHistory(
+                super::super::transport::BrokerSessionHistoryRequest {
+                    token: token.into(),
+                    session_id: 42,
+                    options: crate::acp::session_info::SessionHistoryOptions {
+                        limit: 7,
+                        before: Some("original-turn".into()),
+                        query: Some("needle".into()),
+                        include_tools: true,
+                        max_chars: 900,
+                    },
+                },
+            );
+            write_frame(&mut client, &msg).await.unwrap();
+            let response: BrokerResponse = read_frame(&mut client).await.unwrap();
+            server_task.await.unwrap();
+            assert_eq!(response.outcome["found"], found);
+            if found {
+                assert_eq!(response.outcome["oldest_id"], "original-turn");
+                assert_eq!(response.outcome["note"], "needle");
+                assert_eq!(response.outcome["truncated"], true);
+            } else {
+                assert!(session_info.calls.lock().await.is_empty());
+            }
+        }
+        assert_eq!(*session_info.calls.lock().await, vec![(42, 7)]);
     }
 
     /// A valid `get_session_info` resolves the session by id and returns its

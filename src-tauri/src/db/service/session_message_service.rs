@@ -19,9 +19,36 @@ pub async fn enqueue(
         return Err(DbErr::Custom("invalid session message".into()));
     }
     let txn = db.begin().await?;
+    // Claim SQLite's writer lock before the liveness reads so parallel creation
+    // cannot leave another caller trying to write through a stale read snapshot.
+    txn.execute_unprepared("UPDATE session_message SET id = id WHERE 0").await?;
     ensure_live(&txn, sender).await?;
     ensure_live(&txn, recipient).await?;
-    let id = insert(&txn, sender, recipient, message, mode, reply).await?;
+    let active = super::turn_delivery_service::active(&txn, sender).await?;
+    let provenance = super::turn_delivery_service::MessageProvenance {
+        result_turn_id: None,
+        cause_message_id: active
+            .as_ref()
+            .and_then(|turn| turn.cause_message_id.clone()),
+        root_id: active
+            .as_ref()
+            .map(|turn| turn.root_id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        source_conversation_id: active
+            .as_ref()
+            .map_or(sender, |turn| turn.source_conversation_id),
+        hop: active.as_ref().map_or(1, |turn| turn.hop + 1),
+    };
+    let id = insert_in_tx(
+        &txn,
+        sender,
+        recipient,
+        message,
+        mode,
+        reply,
+        Some(&provenance),
+    )
+    .await?;
     txn.commit().await?;
     Ok(id)
 }
@@ -39,13 +66,14 @@ async fn ensure_live<C: ConnectionTrait>(db: &C, id: i32) -> Result<(), DbErr> {
     Ok(())
 }
 
-async fn insert<C: ConnectionTrait>(
+pub(crate) async fn insert_in_tx<C: ConnectionTrait>(
     db: &C,
     sender: i32,
     recipient: i32,
     message: String,
     mode: String,
     reply: bool,
+    provenance: Option<&super::turn_delivery_service::MessageProvenance>,
 ) -> Result<String, DbErr> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
@@ -56,7 +84,21 @@ async fn insert<C: ConnectionTrait>(
         message: Set(message),
         mode: Set(mode),
         reply_back: Set(reply),
-        status: Set("queued".into()),
+        status: Set(if provenance.is_some_and(|p| p.hop > 8) {
+            "failed"
+        } else {
+            "queued"
+        }
+        .into()),
+        error: Set(provenance
+            .filter(|p| p.hop > 8)
+            .map(|_| "hop_limit_exceeded".into())),
+        recipient_turn_id: Set(None),
+        result_turn_id: Set(provenance.and_then(|p| p.result_turn_id.clone())),
+        cause_message_id: Set(provenance.and_then(|p| p.cause_message_id.clone())),
+        root_id: Set(provenance.map(|p| p.root_id.clone())),
+        source_conversation_id: Set(provenance.map(|p| p.source_conversation_id)),
+        hop: Set(provenance.map_or(0, |p| p.hop)),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
@@ -139,6 +181,16 @@ pub async fn defer_as_queue(db: &DatabaseConnection, id: i32) -> Result<(), DbEr
 }
 
 pub async fn interrupt_in_flight(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let observed = session_message::Entity::find()
+        .filter(session_message::Column::Status.eq("in_flight"))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|message| message.id)
+        .collect::<Vec<_>>();
+    if observed.is_empty() {
+        return Ok(());
+    }
     session_message::Entity::update_many()
         .col_expr(
             session_message::Column::Status,
@@ -152,6 +204,7 @@ pub async fn interrupt_in_flight(db: &DatabaseConnection) -> Result<(), DbErr> {
             session_message::Column::UpdatedAt,
             sea_orm::sea_query::Expr::value(Utc::now()),
         )
+        .filter(session_message::Column::Id.is_in(observed))
         .filter(session_message::Column::Status.eq("in_flight"))
         .exec(db)
         .await?;
@@ -206,7 +259,19 @@ pub async fn settle(
         .exec(&txn)
         .await?;
     if updated.rows_affected == 1 && reply && reason.is_none() {
-        insert(
+        let provenance = super::turn_delivery_service::MessageProvenance {
+            result_turn_id: None,
+            cause_message_id: Some(row.message_id.clone()),
+            root_id: row
+                .root_id
+                .clone()
+                .unwrap_or_else(|| row.message_id.clone()),
+            source_conversation_id: row
+                .source_conversation_id
+                .unwrap_or(row.sender_conversation_id),
+            hop: row.hop + 1,
+        };
+        insert_in_tx(
             &txn,
             row.conversation_id,
             row.sender_conversation_id,
@@ -218,6 +283,7 @@ pub async fn settle(
             ),
             "queue".into(),
             false,
+            Some(&provenance),
         )
         .await?;
     }

@@ -2,16 +2,15 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
-use tokio::sync::oneshot;
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, TransactionTrait};
 use tokio::task::JoinSet;
 
-use super::connection::{current_config_option_values, SetterOutcome, SteerOutcome};
+use super::connection::SteerOutcome;
 use super::delegation::broker::DelegationBroker;
 use super::error::AcpError;
 use super::manager::ConnectionManager;
 use super::types::{
-    AgentOptionsSnapshot, ConnectionStatus, PromptInputBlock, SessionConfigKindInfo,
+    ConnectionStatus, PromptInputBlock, SessionConfigKindInfo, SessionConfigOptionInfo,
 };
 use crate::db::entities::folder::FolderKind;
 use crate::db::entities::{conversation, session_message};
@@ -22,13 +21,10 @@ use crate::web::event_bridge::EventEmitter;
 
 pub(crate) const PROMPT_ID_PREFIX: &str = "session-message-";
 type TurnResult = Result<Option<String>, String>;
-pub(crate) type TurnSender = oneshot::Sender<TurnResult>;
-
 #[derive(Debug)]
-pub(crate) struct TurnWaiter {
-    pub prompt_id: Option<String>,
-    pub turn: Option<u64>,
-    pub reply: Option<TurnSender>,
+pub struct SessionMessageDelivery {
+    pub db: DatabaseConnection,
+    pub message_id: i32,
 }
 
 pub struct SessionCreator {
@@ -37,69 +33,103 @@ pub struct SessionCreator {
     pub data_dir: std::path::PathBuf,
 }
 
-impl SessionCreator {
-    async fn apply_mode(
-        &self,
-        connection: &str,
-        snapshot: &AgentOptionsSnapshot,
-        mode: &str,
-    ) -> Result<bool, String> {
-        let legacy = snapshot
-            .modes
-            .as_ref()
-            .filter(|m| !m.available_modes.is_empty());
-        // Codex exposes both channels. Its config option drives the composer
-        // and its setter returns the mode actually applied by the agent.
-        let option = snapshot.config_options.iter().find_map(|option| {
-            if option.category.as_deref() != Some("mode") {
-                return None;
-            }
-            let SessionConfigKindInfo::Select(select) = &option.kind else {
-                return None;
-            };
-            select
-                .options
-                .iter()
-                .chain(select.groups.iter().flat_map(|group| &group.options))
-                .any(|entry| entry.value == mode)
-                .then_some((&option.id, select))
-        });
-        let outcome = if let Some((id, select)) = option {
-            if select.current_value == mode {
-                return Ok(false);
-            }
-            tokio::time::timeout(
-                Duration::from_secs(15),
-                self.manager
-                    .set_config_option_and_wait(connection, id.clone(), mode.into()),
-            )
-            .await
-        } else if let Some(modes) = legacy {
-            if modes.current_mode_id == mode {
-                return Ok(false);
-            }
-            if !modes.available_modes.iter().any(|entry| entry.id == mode) {
-                return Err(format!(
-                    "permission mode {mode:?} is unavailable for the target agent"
-                ));
-            }
-            tokio::time::timeout(
-                Duration::from_secs(15),
-                self.manager.set_mode_and_wait(connection, mode.into()),
-            )
-            .await
-        } else {
-            return Err(format!(
-                "permission mode {mode:?} is unavailable for the target agent"
-            ));
-        };
-        match outcome.map_err(|_| format!("timed out applying permission mode {mode:?}"))? {
-            Ok(SetterOutcome::Confirmed { current }) if current == mode => Ok(true),
-            Err(error) => Err(format!("could not apply permission mode {mode:?}: {error}")),
-            _ => Err(format!(
-                "the target agent did not confirm permission mode {mode:?}"
-            )),
+fn current_permission_mode(options: &[SessionConfigOptionInfo]) -> Option<&str> {
+    options.iter().find_map(|option| match &option.kind {
+        SessionConfigKindInfo::Select(select) if option.category.as_deref() == Some("mode") => {
+            Some(select.current_value.as_str())
         }
+        _ => None,
+    })
+}
+
+impl SessionCreator {
+    pub(crate) async fn inherited_mode_id(
+        &self,
+        caller: &str,
+        agent_type: crate::models::AgentType,
+    ) -> Option<String> {
+        let state = self.manager.get_state(caller).await?;
+        let state = state.read().await;
+        (state.agent_type == agent_type)
+            .then(|| {
+                current_permission_mode(state.config_options.as_deref().unwrap_or_default())
+                    .or(state.current_mode.as_deref())
+                    .map(str::to_owned)
+            })
+            .flatten()
+    }
+
+    /// Probe the same runtime selectors used by the settings UI.
+    pub async fn list_agent_options(
+        &self,
+        agent_type: crate::models::AgentType,
+        working_dir: Option<String>,
+        preferences: std::collections::BTreeMap<String, String>,
+    ) -> Result<super::delegation::models::AgentOptions, String> {
+        use super::delegation::models::{
+            current_model, is_model, is_reasoning, model_catalog, permission_modes, AgentOptions,
+        };
+        let db = AppDatabase { conn: self.db.clone() };
+        let runtime_env = crate::commands::acp::build_session_runtime_env(&db, agent_type, None, &self.data_dir)
+            .await.map_err(|error| error.to_string())?;
+        let probe = |values| self.manager.probe_agent_options(
+            agent_type, working_dir.clone(), runtime_env.clone(), values,
+        );
+        let snapshot = probe(preferences.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let model_option_id = snapshot
+            .config_options
+            .iter()
+            .find(|option| is_model(option))
+            .map(|option| option.id.clone());
+        let applied = model_option_id
+            .as_ref()
+            .filter(|id| !snapshot.unapplied_config_ids.contains(id))
+            .and_then(|id| preferences.get(id));
+        let mut models = model_catalog(&snapshot.config_options, applied.map(String::as_str));
+        if let Some(id) = model_option_id.as_ref() {
+            let selected = applied
+                .map(String::as_str)
+                .or_else(|| current_model(&snapshot.config_options));
+            for model in &mut models {
+                if (model.reasoning.is_some() && model.reasoning_option_id.is_some())
+                    || Some(model.slug.as_str()) == selected
+                {
+                    continue;
+                }
+                let mut values = preferences.clone();
+                // Start with the target model's default effort.
+                values.retain(|key, _| {
+                    !snapshot
+                        .config_options
+                        .iter()
+                        .any(|option| option.id == *key && is_reasoning(option))
+                });
+                values.insert(id.clone(), model.slug.clone());
+                let probed = match probe(values).await {
+                    Ok(probed) if !probed.unapplied_config_ids.contains(id) => probed,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        tracing::warn!(%error, model = %model.slug, "Could not probe model reasoning choices");
+                        break;
+                    }
+                };
+                if let Some(found) = model_catalog(&probed.config_options, Some(&model.slug))
+                    .into_iter()
+                    .find(|entry| entry.slug == model.slug)
+                {
+                    model.reasoning = found.reasoning;
+                    model.reasoning_option_id = found.reasoning_option_id;
+                    model.context_window = model.context_window.or(found.context_window);
+                }
+            }
+        }
+        Ok(AgentOptions {
+            model_option_id,
+            models,
+            modes: permission_modes(&snapshot),
+        })
     }
 
     pub async fn create(
@@ -112,14 +142,6 @@ impl SessionCreator {
         >,
         broker: &DelegationBroker,
     ) -> Result<(i32, String), String> {
-        if let Some(key) = request.config_values.keys().find(|key| {
-            !matches!(
-                key.as_str(),
-                "model" | "reasoning_effort" | "effort" | "thought_level"
-            )
-        }) {
-            return Err(format!("unsupported create_session config option: {key}"));
-        }
         let Some((caller_state, emitter)) = self.manager.get_state_and_emitter(caller).await else {
             return Err("creator connection is unavailable".into());
         };
@@ -130,31 +152,17 @@ impl SessionCreator {
                 .ok_or("creator has no active conversation")?;
             let agent_type = request.agent_type.unwrap_or(caller.agent_type);
             let mode = if agent_type == caller.agent_type {
-                let current = caller
-                    .config_options
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .find_map(|option| {
-                        if option.category.as_deref() != Some("mode") {
-                            return None;
-                        }
-                        match &option.kind {
-                            SessionConfigKindInfo::Select(select) => {
-                                Some(select.current_value.clone())
-                            }
-                            _ => None,
-                        }
-                    })
-                    .or_else(|| caller.current_mode.clone());
+                let current =
+                    current_permission_mode(caller.config_options.as_deref().unwrap_or_default())
+                        .or(caller.current_mode.as_deref());
                 if request
                     .mode_id
-                    .as_ref()
-                    .is_some_and(|requested| Some(requested) != current.as_ref())
+                    .as_deref()
+                    .is_some_and(|requested| Some(requested) != current)
                 {
                     return Err("same-agent sessions inherit the current permission mode".into());
                 }
-                current
+                current.map(str::to_owned)
             } else {
                 request.mode_id.clone()
             };
@@ -162,10 +170,9 @@ impl SessionCreator {
         };
         let mut defaults = agent_defaults.get(&agent_type).cloned().unwrap_or_default();
         if mode.is_some() {
-            defaults.mode_id = None;
+            defaults.mode_id.clone_from(&mode);
             defaults.config_values.remove("mode");
         }
-        defaults.config_values.extend(request.config_values.clone());
         let source = live_conversation(&self.db, sender)
             .await
             .map_err(|error| error.to_string())?
@@ -197,85 +204,122 @@ impl SessionCreator {
             crate::commands::acp::build_session_runtime_env(&db, agent_type, None, &self.data_dir)
                 .await
                 .map_err(|error| error.to_string())?;
-        let title = Some(request.title.clone());
-        let conversation_id = if folder.kind == FolderKind::Chat {
-            conversation_service::create_chat(&self.db, folder.id, agent_type, title, None)
-                .await
-                .map(|conversation| conversation.id)
-                .map_err(|error| error.to_string())?
-        } else {
-            crate::commands::conversations::create_conversation_core(
-                &self.db, folder.id, agent_type, title,
+        use super::delegation::models::{is_model, validate_create_option_ids};
+        let probe = |values| {
+            self.manager.probe_agent_options(
+                agent_type,
+                Some(folder.path.clone()),
+                runtime_env.clone(),
+                values,
             )
-            .await
-            .map_err(|error| error.to_string())?
         };
-        conversation_service::update_title(&self.db, conversation_id, request.title)
+        let options = probe(Default::default())
             .await
             .map_err(|error| error.to_string())?;
+        if let Err(error) =
+            validate_create_option_ids(&options.config_options, &request.config_values)
+        {
+            // Some models add or replace the reasoning selector when selected.
+            // Send only the confirmed model key until both keys are known.
+            let (id, model) = options
+                .config_options
+                .iter()
+                .find(|option| is_model(option))
+                .and_then(|option| request.config_values.get_key_value(&option.id))
+                .ok_or(error)?;
+            let selected = probe(std::collections::BTreeMap::from([(
+                id.clone(),
+                model.clone(),
+            )]))
+            .await
+            .map_err(|error| error.to_string())?;
+            if selected.unapplied_config_ids.contains(id) {
+                return Err(format!(
+                    "could not select model {model:?}; query list_agent_options for this agent"
+                ));
+            }
+            validate_create_option_ids(&selected.config_options, &request.config_values)?;
+        }
+        defaults.config_values.extend(request.config_values.clone());
+        let git_branch = if folder.kind == FolderKind::Chat {
+            None
+        } else {
+            crate::commands::conversations::detect_git_branch(&folder.path).await
+        };
+        let txn = self.db.begin().await.map_err(|error| error.to_string())?;
+        let title = Some(request.title.clone());
+        let created = if folder.kind == FolderKind::Chat {
+            conversation_service::create_chat(&txn, folder.id, agent_type, title, git_branch).await
+        } else {
+            conversation_service::create(&txn, folder.id, agent_type, title, git_branch).await
+        };
+        let conversation_id = created.map_err(|error| error.to_string())?.id;
+        conversation_service::link_collaborator(&txn, sender, conversation_id)
+            .await.map_err(|error| error.to_string())?;
+        conversation_service::update_title(&txn, conversation_id, request.title)
+            .await
+            .map_err(|error| error.to_string())?;
+        txn.commit().await.map_err(|error| error.to_string())?;
         crate::commands::conversations::emit_conversation_upsert(
             &emitter,
             &self.db,
             conversation_id,
         )
         .await;
-        let connection = match self
-            .manager
-            .spawn_agent(
+        let started = async {
+            let connection = crate::commands::acp::spawn_with_conversation_selection(
+                &self.manager,
+                &self.db,
                 agent_type,
                 Some(folder.path),
                 None,
                 runtime_env,
                 "session-tools".into(),
                 emitter.clone(),
+                Some(conversation_id),
                 defaults.mode_id,
                 defaults.config_values,
             )
             .await
-        {
-            Ok(connection) => connection,
-            Err(error) => {
-                let _ = conversation_service::update_status(
-                    &self.db,
-                    conversation_id,
-                    crate::db::entities::conversation::ConversationStatus::Cancelled,
-                )
-                .await;
-                return Err(format!(
-                    "conversation {} was created but could not start: {error}",
-                    conversation_id
-                ));
-            }
-        };
-        if mode.is_some() || !request.config_values.is_empty() {
-            let verified = async {
-                let mut snapshot = self
+            .map_err(|error| error.to_string())?;
+            // Creation accepts explicit settings for the first prompt. The shared
+            // connect path can fall back on stale saved preferences, so use its
+            // result here to reject an unavailable explicit pick before sending.
+            let confirmed = async {
+                let snapshot = self
                     .manager
                     .wait_for_session_options(&connection, Duration::from_secs(60))
                     .await
                     .map_err(|error| error.to_string())?;
-                if let Some(mode) = mode.as_deref() {
-                    if self.apply_mode(&connection, &snapshot, mode).await?
-                        && !request.config_values.is_empty()
-                    {
-                        snapshot = self
-                            .manager
-                            .wait_for_session_options(&connection, Duration::from_secs(60))
-                            .await
-                            .map_err(|error| error.to_string())?;
-                    }
+                let current_mode =
+                    current_permission_mode(&snapshot.config_options).or_else(|| {
+                        snapshot
+                            .modes
+                            .as_ref()
+                            .map(|modes| modes.current_mode_id.as_str())
+                    });
+                if let Some(mode) = mode.as_deref().filter(|mode| Some(*mode) != current_mode) {
+                    return Err(format!(
+                        "could not apply permission mode {mode:?} for {agent_type}"
+                    ));
                 }
-                let current = current_config_option_values(&snapshot.config_options);
-                for (key, value) in &request.config_values {
-                    if current.get(key) != Some(value) {
-                        return Err(format!("could not apply {key}={value} for {agent_type}"));
-                    }
-                }
+                super::delegation::models::validate_config_values(
+                    &snapshot.config_options,
+                    &request.config_values,
+                )?;
                 Ok(())
             }
             .await;
-            if let Err(error) = verified {
+            if let Err(error) = confirmed {
                 let _ = self.manager.disconnect(&connection).await;
+                return Err(error);
+            }
+            Ok(connection)
+        }
+        .await;
+        let connection = match started {
+            Ok(connection) => connection,
+            Err(error) => {
                 let _ = conversation_service::update_status(
                     &self.db,
                     conversation_id,
@@ -288,9 +332,11 @@ impl SessionCreator {
                     conversation_id,
                 )
                 .await;
-                return Err(error);
+                return Err(format!(
+                    "conversation {conversation_id} was created but could not start: {error}"
+                ));
             }
-        }
+        };
         let message_id = queue::enqueue(
             &self.db,
             sender,
@@ -328,7 +374,19 @@ pub async fn start(
     data_dir: std::path::PathBuf,
     emitter: EventEmitter,
 ) {
-    while let Err(error) = queue::interrupt_in_flight(&db).await {
+    let startup = chrono::Utc::now();
+    let recovery = loop {
+        match crate::db::service::turn_delivery_service::capture_recovery(&db, startup).await {
+            Ok(snapshot) => break snapshot,
+            Err(error) => {
+                tracing::warn!(%error, "could not capture session recovery boundary");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    };
+    while let Err(error) =
+        crate::db::service::turn_delivery_service::recover_captured(&db, recovery.clone()).await
+    {
         tracing::warn!(%error, "could not recover session messages");
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -423,24 +481,19 @@ async fn dispatch(
     let connection = if is_initial {
         initial_connection
     } else {
-        match manager
-            .find_connection_by_conversation_id(recipient.id)
+        match crate::models::AgentType::from_wire(&recipient.agent_type) {
+            Some(agent) => crate::commands::acp::acp_find_connection_for_conversation_core(
+                manager,
+                db,
+                recipient.id,
+                recipient.external_id.as_deref(),
+                agent,
+            )
             .await
-        {
-            Some(id) => Some(id),
-            None => match recipient.external_id.as_deref() {
-                Some(external_id) => {
-                    match crate::models::agent::AgentType::from_wire(&recipient.agent_type) {
-                        Some(agent) => {
-                            manager
-                                .find_connection_by_external_id(external_id, agent)
-                                .await
-                        }
-                        None => None,
-                    }
-                }
-                None => None,
-            },
+            .ok()
+            .flatten()
+            .map(|info| info.connection_id),
+            None => None,
         }
     };
     let connection = match (connection, activation) {
@@ -482,9 +535,7 @@ async fn dispatch(
     let Some(row) = valid.into_iter().find(|row| !busy || row.mode == "steer") else {
         return Ok(());
     };
-    if !broker.config_snapshot().await.session_messaging_enabled
-        || !queue::claim(db, &row).await?
-    {
+    if !broker.config_snapshot().await.session_messaging_enabled || !queue::claim(db, &row).await? {
         return Ok(());
     }
 
@@ -492,46 +543,39 @@ async fn dispatch(
         "[Codeg message from conversation {}; message {}]\n\n{}",
         row.sender_conversation_id, row.message_id, row.message
     );
-    let (reply, mut result) = oneshot::channel();
     let prompt_id = format!("{PROMPT_ID_PREFIX}{}", row.message_id);
     let open_prompt = if busy {
         match manager
-            .steer_session_message(&connection, text.clone(), reply)
+            .steer_session_message(
+                &connection,
+                text.clone(),
+                SessionMessageDelivery {
+                    db: db.clone(),
+                    message_id: row.id,
+                },
+            )
             .await
         {
-            Ok(SteerOutcome::Injected) => None,
+            Ok(SteerOutcome::Injected) => false,
             Ok(SteerOutcome::StartedNewTurn) => {
-                let outcome = if row.reply_back {
-                    Err("steering started a detached turn without a tracked result".into())
-                } else {
-                    Ok(None)
-                };
-                return finish(db, &row, outcome).await;
+                return finish(
+                    db,
+                    &row,
+                    Err(
+                        "steering started an untracked detached turn; delivery is unconfirmed"
+                            .into(),
+                    ),
+                )
+                .await;
             }
             Ok(SteerOutcome::PromptRequired)
-            | Err(AcpError::FeedbackDisabled | AcpError::NoActiveTurn) => {
-                let (reply, fallback_result) = oneshot::channel();
-                result = fallback_result;
-                Some(reply)
-            }
+            | Err(AcpError::FeedbackDisabled | AcpError::NoActiveTurn) => true,
             Err(error) => return finish(db, &row, Err(error.to_string())).await,
         }
     } else {
-        Some(reply)
+        true
     };
-
-    let sent = if let Some(reply) = open_prompt {
-        {
-            let mut state = state.write().await;
-            state
-                .message_turns
-                .retain(|waiter| waiter.reply.as_ref().is_some_and(|tx| !tx.is_closed()));
-            state.message_turns.push(TurnWaiter {
-                prompt_id: Some(prompt_id.clone()),
-                turn: None,
-                reply: Some(reply),
-            });
-        }
+    let sent = if open_prompt {
         manager
             .send_prompt_linked_with_message_id(
                 &AppDatabase { conn: db.clone() },
@@ -548,17 +592,7 @@ async fn dispatch(
         Ok(())
     };
     match sent {
-        Ok(()) => {
-            let db = db.clone();
-            tokio::spawn(async move {
-                let outcome = result
-                    .await
-                    .unwrap_or_else(|_| Err("recipient disconnected before its turn ended".into()));
-                if let Err(error) = finish(&db, &row, outcome).await {
-                    tracing::error!(message_id = %row.message_id, %error, "could not settle session message");
-                }
-            });
-        }
+        Ok(()) => {}
         Err(AcpError::TurnInProgress) if busy => {
             queue::defer_as_queue(db, row.id).await?;
         }
@@ -603,7 +637,7 @@ async fn activate_recipient(
         .map(|model| ("model".into(), model))
         .into_iter()
         .collect();
-    let outcome = crate::commands::acp::spawn_with_conversation_selection(
+    let outcome = crate::commands::acp::spawn_and_bind_conversation_selection(
         manager,
         db,
         agent,
@@ -620,6 +654,7 @@ async fn activate_recipient(
     .map_err(|error| error.to_string())?;
     let connection = outcome.connection_id;
     let ready: Result<(), String> = async {
+        outcome.bound.map_err(|error| error.to_string())?;
         manager
             .wait_for_session_options(&connection, Duration::from_secs(60))
             .await

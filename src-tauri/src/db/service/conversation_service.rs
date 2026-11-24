@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    QueryFilter, QueryOrder, QuerySelect, QueryTrait, Set, TransactionTrait,
 };
 
 use crate::db::entities::conversation::ConversationKind;
@@ -13,7 +13,7 @@ use crate::db::service::conversation_tag_service;
 use crate::models::{AgentType, AssistantRunSnapshot, ConversationSelection, DbConversationSummary};
 
 pub async fn create(
-    conn: &DatabaseConnection,
+    conn: &impl sea_orm::ConnectionTrait,
     folder_id: i32,
     agent_type: AgentType,
     title: Option<String>,
@@ -36,7 +36,7 @@ pub async fn create(
 /// section. Callers must pair it with the hidden chat folder created in the
 /// same flow (`create_chat_conversation_core`).
 pub async fn create_chat(
-    conn: &DatabaseConnection,
+    conn: &impl sea_orm::ConnectionTrait,
     folder_id: i32,
     agent_type: AgentType,
     title: Option<String>,
@@ -80,7 +80,7 @@ pub async fn create_with_delegation(
 }
 
 async fn create_inner(
-    conn: &DatabaseConnection,
+    conn: &impl sea_orm::ConnectionTrait,
     folder_id: i32,
     agent_type: AgentType,
     title: Option<String>,
@@ -182,7 +182,7 @@ pub async fn update_status_if(
 /// auto-title backfill ([`refresh_auto_title`]) leaves this row alone, so the
 /// user's hand-picked name survives every subsequent session-file parse.
 pub async fn update_title(
-    conn: &DatabaseConnection,
+    conn: &impl sea_orm::ConnectionTrait,
     conversation_id: i32,
     title: String,
 ) -> Result<(), DbError> {
@@ -1883,11 +1883,95 @@ pub async fn list_children(
     Ok(summaries)
 }
 
+/// Independent collaboration links are directional and separate from delegation.
+pub async fn set_collaborator(
+    conn: &impl sea_orm::ConnectionTrait,
+    source_id: i32,
+    target_id: i32,
+    linked: bool,
+) -> Result<(), DbError> {
+    use crate::db::entities::conversation_collaborator as link;
+    use sea_orm::{DbBackend, Statement};
+
+    if !linked {
+        link::Entity::delete_by_id((source_id, target_id)).exec(conn).await?;
+        return Ok(());
+    }
+    let result = conn.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "INSERT INTO conversation_collaborator (source_id, target_id)
+         SELECT source.id, target.id FROM conversation source, conversation target
+         WHERE source.id = ? AND target.id = ? AND source.id <> target.id
+           AND source.deleted_at IS NULL AND target.deleted_at IS NULL
+           AND target.parent_id IS NULL
+         ON CONFLICT (source_id, target_id) DO UPDATE SET target_id = excluded.target_id",
+        [source_id.into(), target_id.into()],
+    )).await?;
+    if result.rows_affected() == 0 {
+        return Err(DbError::Validation("Choose an existing independent conversation other than the current one".into()));
+    }
+    Ok(())
+}
+
+pub async fn list_collaborators(
+    conn: &DatabaseConnection,
+    source_id: i32,
+    include_children: bool,
+) -> Result<Vec<DbConversationSummary>, DbError> {
+    use crate::db::entities::conversation_collaborator as link;
+    use sea_orm::Condition;
+
+    let linked = link::Entity::find()
+        .select_only()
+        .column(link::Column::TargetId)
+        .filter(link::Column::SourceId.eq(source_id))
+        .into_query();
+    let mut related = Condition::any().add(conversation::Column::Id.in_subquery(linked));
+    if include_children {
+        related = related.add(conversation::Column::ParentId.eq(source_id));
+    }
+    let rows = conversation::Entity::find()
+        .filter(related)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .order_by_desc(conversation::Column::CreatedAt)
+        .order_by_desc(conversation::Column::Id)
+        .all(conn).await?;
+    let mut summaries: Vec<_> = rows.into_iter().map(conv_to_summary).collect();
+    fill_summary_extras(conn, &mut summaries).await?;
+    Ok(summaries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::acp::delegation::spawner::DelegationLink;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+    #[tokio::test]
+    async fn independent_collaborator_keeps_root_kind_and_can_be_unlinked() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-collaborator").await;
+        let (parent, child) = seed_parent_with_child(&db.conn, folder).await;
+        let peer = create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        set_collaborator(&db.conn, parent, peer.id, true).await.unwrap();
+        set_collaborator(&db.conn, parent, peer.id, true).await.unwrap();
+
+        let peers = list_collaborators(&db.conn, parent, false).await.unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].id, peer.id);
+        assert!(peers[0].parent_id.is_none());
+        assert!(list_children(&db.conn, parent).await.unwrap().iter().all(|row| row.id == child));
+        let combined = list_collaborators(&db.conn, parent, true).await.unwrap();
+        assert_eq!(combined.len(), 2);
+        assert!(set_collaborator(&db.conn, parent, child, true).await.is_err());
+        assert!(set_collaborator(&db.conn, parent, parent, true).await.is_err());
+
+        set_collaborator(&db.conn, parent, peer.id, false).await.unwrap();
+        assert!(list_collaborators(&db.conn, parent, false).await.unwrap().is_empty());
+        assert_eq!(get_by_id(&db.conn, peer.id).await.unwrap().id, peer.id);
+    }
 
     /// Build a parent + a delegation child for filter assertions.
     async fn seed_parent_with_child(conn: &DatabaseConnection, folder_id: i32) -> (i32, i32) {

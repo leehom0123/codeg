@@ -2507,72 +2507,84 @@ impl DelegationBroker {
             .deregister_inflight(inflight_id);
     }
 
-    /// Discover the same runtime model options used by the model picker.
-    pub async fn list_models(
+    /// Probe the same runtime selectors used by the settings UI.
+    pub async fn list_agent_options(
         &self,
         parent_connection_id: &str,
         agent_type: AgentType,
         working_dir: Option<String>,
-        model: Option<String>,
-    ) -> Result<Vec<super::models::ModelInfo>, String> {
+    ) -> Result<super::models::AgentOptions, String> {
+        use super::models::{
+            current_model, is_model, model_catalog, permission_modes, AgentOptions,
+        };
         let cfg = self.config_snapshot().await;
-        if !cfg.enabled {
-            return Err("delegation is disabled".into());
+        if !cfg.enabled && !cfg.session_messaging_enabled {
+            return Err("delegation and session messaging are disabled".into());
         }
-        let inspected_model = model.clone();
-        let (_, mut preferences) = launch_preferences(None, cfg.agent_defaults.get(&agent_type));
-        if let Some(model) = model {
-            let snapshot = self
-                .spawner
-                .probe_options(
-                    parent_connection_id,
-                    agent_type,
-                    working_dir.clone(),
-                    preferences.clone(),
-                )
-                .await
-                .map_err(|error| error.to_string())?;
-            preferences.extend(
-                super::models::ModelSelection {
-                    model: Some(model),
-                    reasoning: None,
-                }
-                .resolve(&snapshot.config_options)?,
-            );
-        }
-        let snapshot = self
-            .spawner
-            .probe_options(
+        let (_, preferences) = launch_preferences(None, cfg.agent_defaults.get(&agent_type));
+        let probe = |values| {
+            self.spawner.probe_options(
                 parent_connection_id,
                 agent_type,
-                working_dir,
-                preferences.clone(),
+                working_dir.clone(),
+                values,
             )
+        };
+        let snapshot = probe(preferences.clone())
             .await
             .map_err(|error| error.to_string())?;
-        if inspected_model.is_some()
-            && snapshot.config_options.iter().any(|option| {
-                (option.category.as_deref() == Some("model") || option.id == "model")
-                    && snapshot.unapplied_config_ids.contains(&option.id)
-            })
-        {
-            return Err(format!(
-                "could not apply model {inspected_model:?}; available models: {:?}",
-                super::models::model_catalog(&snapshot.config_options, None)
-            ));
-        }
-        // The settings probe reports the default as current_value, but its
-        // reasoning choices belong to the model applied during the probe.
-        let selected_model = snapshot
+        let model_option_id = snapshot
             .config_options
             .iter()
-            .find(|option| option.category.as_deref() == Some("model") || option.id == "model")
-            .filter(|option| !snapshot.unapplied_config_ids.contains(&option.id))
-            .and_then(|option| preferences.get(&option.id));
-        Ok(super::models::model_catalog(
-            &snapshot.config_options,
-            selected_model.map(String::as_str),
-        ))
+            .find(|option| is_model(option))
+            .map(|option| option.id.clone());
+        let applied = model_option_id
+            .as_ref()
+            .filter(|id| !snapshot.unapplied_config_ids.contains(id))
+            .and_then(|id| preferences.get(id));
+        let mut models = model_catalog(&snapshot.config_options, applied.map(String::as_str));
+        if let Some(id) = model_option_id.as_ref() {
+            let selected = applied
+                .map(String::as_str)
+                .or_else(|| current_model(&snapshot.config_options));
+            for model in &mut models {
+                if (model.reasoning.is_some() && model.reasoning_option_id.is_some())
+                    || Some(model.slug.as_str()) == selected
+                {
+                    continue;
+                }
+                let mut values = preferences.clone();
+                // Start with the target model's default effort.
+                values.retain(|key, _| {
+                    !snapshot
+                        .config_options
+                        .iter()
+                        .any(|option| option.id == *key && super::models::is_reasoning(option))
+                });
+                values.insert(id.clone(), model.slug.clone());
+                let probed = match probe(values).await {
+                    Ok(probed) if !probed.unapplied_config_ids.contains(id) => probed,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        tracing::warn!(%error, model = %model.slug, "Could not probe model reasoning choices");
+                        break;
+                    }
+                };
+                if let Some(found) = model_catalog(&probed.config_options, Some(&model.slug))
+                    .into_iter()
+                    .find(|entry| entry.slug == model.slug)
+                {
+                    model.reasoning = found.reasoning;
+                    model.reasoning_option_id = found.reasoning_option_id;
+                    model.context_window = model.context_window.or(found.context_window);
+                }
+            }
+        }
+        Ok(AgentOptions {
+            model_option_id,
+            models,
+            modes: permission_modes(&snapshot),
+        })
     }
 
     /// Async entry point for `delegate_to_agent`. Does the bounded setup

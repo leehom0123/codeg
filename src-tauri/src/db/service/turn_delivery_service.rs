@@ -50,7 +50,7 @@ async fn begin_with_state(
     policy: Option<&DeliveryPolicy>,
     state: &str,
 ) -> Result<String, DbErr> {
-    let txn = db.begin().await?;
+    let txn = queue::begin_write(db).await?;
     let turn_id = uuid::Uuid::new_v4().to_string();
     let input = match input_message_id {
         Some(id) => {

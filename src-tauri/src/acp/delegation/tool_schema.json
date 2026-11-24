@@ -59,34 +59,30 @@
         },
         "model": {
           "type": "string",
-          "description": "Optional exact model slug from list_models. Overrides the agent or assistant saved model for this task."
+          "description": "Optional exact model slug from list_agent_options. Overrides the agent or assistant saved model for this task."
         },
         "reasoning": {
           "type": "string",
-          "description": "Optional reasoning level from list_models for the chosen model. Overrides the saved level for this task; unsupported values are rejected before the task starts."
+          "description": "Optional reasoning level from list_agent_options for the chosen model. Overrides the saved level for this task; unsupported values are rejected before the task starts."
         }
       }
     }
   },
   {
-    "name": "list_models",
-    "description": "List the models offered by a local agent runtime, with their exact slugs, display names, reasoning levels and context windows when known. Use these values for delegate_to_agent. Pass model to load model-dependent reasoning choices. null means the runtime did not advertise that metadata.",
+    "name": "list_agent_options",
+    "description": "List the models, model-specific reasoning levels, and permission modes for a local agent in one call. Use model_option_id, model slug, reasoning_option_id, reasoning value, and mode_id as inputs to create_session. For the same agent type use inherited_mode_id. The runtime may omit some metadata. For delegate_to_agent, use the model slug and reasoning value.",
     "inputSchema": {
       "type": "object",
-      "required": [
-        "agent_type"
-      ],
+      "required": ["agent_type"],
       "properties": {
         "agent_type": {
           "type": "string",
           "description": "Agent slug, including a configured custom agent."
-        },
-        "model": {
-          "type": "string",
-          "description": "Optional exact model slug to inspect its reasoning choices."
         }
-      }
-    }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "readOnlyHint": true }
   },
   {
     "name": "get_current_session",
@@ -113,7 +109,7 @@
   },
   {
     "name": "create_session",
-    "description": "Create an independent Codeg conversation. Specify a title, first message, model, reasoning setting, and permission mode. By default it uses the current conversation's agent type and folder. Use this when the user asks to create separate conversations, have multiple sessions chat, or take turns continuing a story. Returns conversation_id after starting the first message. The conversation has its own history and stays available after the creator finishes. The first answer is sent back automatically. Use send_to_session with reply=true for later messages. Finish your turn after creating or sending so the automatic answers can arrive as visible incoming messages and start the next turn; do not poll get_session_info for answers.",
+    "description": "Create an independent Codeg conversation. Specify a title, first message, model, reasoning setting, and permission mode. By default it uses the current conversation's agent type and folder. Use this when the user asks to create separate conversations, have multiple sessions chat, or take turns continuing a story. Returns conversation_id after starting the first message. The conversation has its own history and stays available after the creator finishes. It is automatically linked as an independent collaborator of the creator. The first answer is sent back automatically. Use send_to_session with reply=true for later messages. Finish your turn after creating or sending so the automatic answers can arrive as visible incoming messages and start the next turn; do not poll get_session_info for answers.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -171,15 +167,10 @@
         },
         "config_values": {
           "type": "object",
-          "propertyNames": { "enum": ["model", "reasoning_effort", "effort", "thought_level"] },
           "additionalProperties": { "type": "string", "pattern": "\\S" },
-          "required": ["model"],
-          "anyOf": [
-            { "required": ["reasoning_effort"] },
-            { "required": ["effort"] },
-            { "required": ["thought_level"] }
-          ],
-          "description": "Specify model and the reasoning option ID offered by the target agent. For Codex, use reasoning_effort. The first message is sent only if the supplied settings take effect."
+          "minProperties": 2,
+          "maxProperties": 2,
+          "description": "Use the model_option_id and reasoning_option_id from list_agent_options as keys. Use the chosen model slug and reasoning level as their values. The first message is sent only if the settings take effect."
         }
       }
     }
@@ -354,7 +345,7 @@
   },
   {
     "name": "get_session_info",
-    "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). Also returns up to 200 persisted direct children (session_id, task_id, conversation status); children_truncated indicates additional children. Use get_delegation_status for detailed task reports. The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
+    "description": "Look up a session/conversation the user referenced in their message and return what it is: its title, which agent ran it, its status, workspace folder, git branch, model, message count, and token-usage stats — and, on request, a compact view of its most recent messages. RECOGNIZING A MENTIONED SESSION: the user can @-mention a past session directly in their message — it appears as a Markdown link `[Session title](codeg://session/<number>)`, whose text is that session's title and whose `<number>` is codeg's internal conversation id (e.g. `[Fix auth](codeg://session/214)` is the session titled 'Fix auth'). Such a mention IS the user explicitly pointing you at that session, even when they never name this tool — call it whenever what that session is about or what happened in it matters to the request (e.g. to continue its work, build on its results, answer questions about it, or summarize it). If the message mentions several sessions, make one call per session. Pass the NUMBER from the reference as `session_id` (it is codeg's internal conversation id, NOT the agent's own session id). Also returns up to 200 persisted direct children (session_id, task_id, conversation status); children_truncated indicates additional children. Use get_delegation_status for detailed task reports. Independent collaboration sessions are listed separately in collaborators. The result is read-only and never modifies the session. A session that no longer exists returns a `found: false` result you can act on — it is not an error.",
     "inputSchema": {
       "type": "object",
       "required": [

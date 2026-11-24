@@ -143,9 +143,8 @@ import {
   RECENT_PAGE_SIZE,
   reuseSelected,
   reuseSet,
-  selectChatConversationsWithReuse,
-  selectBtwConversationsWithReuse,
   selectPinnedWithReuse,
+  selectUnpinnedConversationsByKind,
   selectRecentConversationsWithReuse,
   worktreeChildrenByParent,
   worktreeHeaderAlias,
@@ -1526,8 +1525,9 @@ export function SidebarConversationList({
   const btwConvsRef = useRef<DbConversationSummary[]>([])
   /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const chatConversations = useMemo(() => {
-    const next = selectChatConversationsWithReuse(
+    const next = selectUnpinnedConversationsByKind(
       shownConversations,
+      "chat",
       showCompleted,
       chatConvsRef.current
     )
@@ -1535,8 +1535,9 @@ export function SidebarConversationList({
     return next
   }, [shownConversations, showCompleted])
   const btwConversations = useMemo(() => {
-    const next = selectBtwConversationsWithReuse(
+    const next = selectUnpinnedConversationsByKind(
       shownConversations,
+      "btw",
       showCompleted,
       btwConvsRef.current
     )

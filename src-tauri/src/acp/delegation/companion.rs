@@ -168,6 +168,7 @@ pub struct CompanionFeatures {
     pub feedback: bool,
     pub ask: bool,
     pub sessions: bool,
+    pub project_knowledge: bool,
     /// Work-task reporting tools (`task_progress` / `task_complete`) — injected
     /// only into spawns launched by the task engine.
     pub tasks: bool,
@@ -239,6 +240,7 @@ impl CompanionFeatures {
                 feedback: false,
                 ask: false,
                 sessions: false,
+                project_knowledge: false,
                 tasks: false,
                 result: false,
                 automations: false,
@@ -257,6 +259,7 @@ impl CompanionFeatures {
             feedback: false,
             ask: false,
             sessions: false,
+            project_knowledge: false,
             tasks: false,
             result: false,
             automations: false,
@@ -275,6 +278,7 @@ impl CompanionFeatures {
                 "feedback" => f.feedback = true,
                 "ask" => f.ask = true,
                 "sessions" => f.sessions = true,
+                "project_knowledge" => f.project_knowledge = true,
                 "tasks" => f.tasks = true,
                 "result" => f.result = true,
                 "automations" => f.automations = true,
@@ -297,6 +301,7 @@ impl CompanionFeatures {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
             "get_session_info" | "rename_session" | "read_session_history" => self.sessions,
+            "project_knowledge" => self.project_knowledge,
             "task_progress" | "task_complete" => self.tasks,
             "submit_result" => self.result,
             "create_automation" => self.automations,
@@ -1380,6 +1385,28 @@ async fn build_tools_call_spawn(
                 round_trip,
                 render_session_history_result,
             )
+            .await
+        }
+        "project_knowledge" => {
+            let request = match serde_json::from_value(arguments) {
+                Ok(request) => request,
+                Err(error) => return LineAction::Respond(err(id, -32602, error.to_string())),
+            };
+            let message = super::transport::BrokerMessage::ProjectKnowledge {
+                token: ctx.token.clone(),
+                request,
+            };
+            let round_trip =
+                Box::pin(
+                    async move { super::transport::message_round_trip(&socket, &message).await },
+                );
+            register_and_spawn(inflight, id, None, round_trip, |outcome| {
+                json!({
+                    "isError": outcome.get("error").is_some(),
+                    "content": [{ "type": "text", "text": outcome.to_string() }],
+                    "structuredContent": outcome,
+                })
+            })
             .await
         }
         "get_session_info" => {
@@ -5076,6 +5103,7 @@ mod tests {
             feedback: false,
             ask: false,
             sessions: false,
+            project_knowledge: false,
             tasks: false,
             result: false,
             automations: false,
@@ -5714,6 +5742,7 @@ mod tests {
         feedback: true,
         ask: false,
         sessions: false,
+        project_knowledge: false,
         tasks: false,
         result: false,
         automations: false,
@@ -5731,6 +5760,7 @@ mod tests {
         feedback: true,
         ask: false,
         sessions: false,
+        project_knowledge: false,
         tasks: false,
         result: false,
         automations: false,
@@ -5748,6 +5778,7 @@ mod tests {
         feedback: false,
         ask: true,
         sessions: false,
+        project_knowledge: false,
         tasks: false,
         result: false,
         automations: false,
@@ -5765,6 +5796,7 @@ mod tests {
         feedback: false,
         ask: false,
         sessions: true,
+        project_knowledge: false,
         tasks: false,
         result: false,
         automations: false,
@@ -6429,6 +6461,7 @@ mod tests {
         feedback: false,
         ask: false,
         sessions: false,
+        project_knowledge: false,
         tasks: false,
         result: false,
         automations: true,
@@ -6446,6 +6479,7 @@ mod tests {
         feedback: false,
         ask: false,
         sessions: false,
+        project_knowledge: false,
         tasks: false,
         result: false,
         automations: false,
@@ -7476,6 +7510,7 @@ mod tests {
         feedback: false,
         ask: false,
         sessions: false,
+        project_knowledge: false,
         tasks: false,
         result: false,
         automations: false,

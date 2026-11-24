@@ -155,6 +155,7 @@ const BUILT_IN = [
   "Commits",
   "Automations",
   "To-dos",
+  "Project Knowledge",
   "Issues",
   "Pull requests",
 ]
@@ -163,6 +164,7 @@ const BUILT_IN = [
 const REVERSED: AuxPanelTab[] = [
   "pull_requests",
   "issues",
+  "project_knowledge",
   "tasks",
   "automations",
   "git_log",
@@ -379,6 +381,7 @@ describe("AuxPanel", () => {
     )
     expect(railTabs()).toEqual([
       "To-dos",
+      "Project Knowledge",
       "Files",
       "Session Details",
       "Issues",
@@ -399,6 +402,7 @@ describe("AuxPanel", () => {
       "Commits",
       "Automations",
       "To-dos",
+      "Project Knowledge",
       "Issues",
       "Pull requests",
       "Changes",
@@ -416,6 +420,7 @@ describe("AuxPanel", () => {
       "git_log",
       "automations",
       "tasks",
+      "project_knowledge",
       "issues",
       "pull_requests",
     ]
@@ -426,6 +431,7 @@ describe("AuxPanel", () => {
       "Commits",
       "Automations",
       "To-dos",
+      "Project Knowledge",
       "Issues",
       "Pull requests",
     ]
@@ -477,6 +483,7 @@ describe("AuxPanel", () => {
       "Commits",
       "Automations",
       "To-dos",
+      "Project Knowledge",
       "Issues",
       "Pull requests",
     ])
@@ -487,6 +494,7 @@ describe("AuxPanel", () => {
       "git_log",
       "automations",
       "tasks",
+      "project_knowledge",
       "issues",
       "pull_requests",
     ])

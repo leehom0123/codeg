@@ -933,7 +933,20 @@ impl DelegationListener {
         match crate::db::service::session_message_service::enqueue(
             db, sender, req.conversation_id, req.message, req.mode, req.reply,
         ).await {
-            Ok(message_id) => serde_json::json!({"message_id": message_id}),
+            Ok(message_id) => {
+                use crate::db::entities::session_message;
+                use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+                match session_message::Entity::find()
+                    .filter(session_message::Column::MessageId.eq(message_id.clone()))
+                    .one(db)
+                    .await
+                {
+                    Ok(Some(row)) => {
+                        serde_json::json!({"message_id": message_id, "status": row.status, "error": row.error})
+                    }
+                    _ => serde_json::json!({"message_id": message_id}),
+                }
+            }
             Err(error) => serde_json::json!({"error": error.to_string()}),
         }
     }
@@ -1553,7 +1566,12 @@ impl DelegationListener {
                 return report_failed("invalid_notify_mode", "notify_mode must be poll or deliver")
             }
         };
-        if notify_mode == "deliver" && entry.agent_hosts_tools {
+        let follow = match req.input.get("follow") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return report_failed("invalid_follow", "follow must be a boolean"),
+        };
+        if (notify_mode == "deliver" || follow) && entry.agent_hosts_tools {
             return report_failed(
                 "delivery_unavailable",
                 "automatic delivery is unavailable for this agent",
@@ -1575,7 +1593,7 @@ impl DelegationListener {
             Err(error) => return report_failed("invalid_configuration", &error.to_string()),
         };
         self.broker
-            .start_delegation_configured(delegation_req, selection, notify_mode, false)
+            .start_delegation_configured(delegation_req, selection, notify_mode, follow)
             .await
     }
 

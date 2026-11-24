@@ -186,6 +186,10 @@ pub struct BrokerCommitFeedbackRequest {
 pub struct BrokerAskRequest {
     pub token: String,
     pub questions: Vec<QuestionSpec>,
+    /// A personal assistant's brain names the input of its turn the
+    /// question is for (`for`), so it shows where that input came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub for_input: Option<String>,
 }
 
 /// Resolve a session the user referenced (`codeg://session/<id>`) into its
@@ -204,6 +208,29 @@ pub struct BrokerSessionRequest {
     /// [`crate::acp::session_info::MAX_SESSION_MESSAGES`] by the resolver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_messages: Option<u32>,
+}
+
+/// Rename the calling conversation or one of its direct delegation children.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerRenameSessionRequest {
+    pub token: String,
+    pub session_id: Option<i32>,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerStopSessionRequest {
+    pub token: String,
+    pub session_id: Option<i32>,
+}
+
+/// Read transcript history with the same token and readable-session scope as
+/// BrokerSessionRequest. Options are re-bounded by the production resolver.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerSessionHistoryRequest {
+    pub token: String,
+    pub session_id: i32,
+    pub options: crate::acp::session_info::SessionHistoryOptions,
 }
 
 /// Report a progress milestone for the work task driving the parent session.
@@ -273,6 +300,20 @@ pub struct BrokerCreateAutomationRequest {
 pub struct BrokerCreateWorkTaskRequest {
     pub token: String,
     pub spec: NewWorkTaskSpec,
+}
+
+/// One call of a personal-agent tool (`assistant_list`, `project_list`,
+/// `dispatch`, `dispatch_followup`, `item_list`, `item_read`, `item_update`,
+/// `timeline_read`). One message for the whole group: the companion only checks
+/// the call's shape, and the app — which alone knows whether the caller is the
+/// personal agent's current connection — validates and answers it. Answered
+/// with a [`crate::personal_agent::tools::ToolOutcome`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerPersonalAgentRequest {
+    pub token: String,
+    pub tool: String,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
 }
 
 /// List the built-in browser's tabs as an agent may see them. Backs the
@@ -467,12 +508,16 @@ pub enum BrokerMessage {
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
     SessionInfo(BrokerSessionRequest),
+    RenameSession(BrokerRenameSessionRequest),
+    StopSession(BrokerStopSessionRequest),
+    SessionHistory(BrokerSessionHistoryRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     ResultSchema(BrokerResultSchemaRequest),
     SubmitResult(BrokerSubmitResultRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
+    PersonalAgent(BrokerPersonalAgentRequest),
     BrowserTabs(BrokerBrowserTabsRequest),
     BrowserSnapshot(BrokerBrowserSnapshotRequest),
     BrowserAct(BrokerBrowserActRequest),
@@ -494,6 +539,7 @@ pub enum BrokerMessage {
     /// empty list when the lookup fails, so a companion never mistakes a
     /// refusal for an old listener (see `Ping`).
     ListAssistants(BrokerListAssistantsRequest),
+    ListAgentOptions(BrokerListAgentOptionsRequest),
     /// Liveness and capability probe, carrying no `token`: the answer reveals
     /// nothing beyond "the socket is being served" and what this listener
     /// understands. Sent by codeg's own service-status check
@@ -511,10 +557,21 @@ pub enum BrokerMessage {
     Ping,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListAgentOptionsRequest {
+    pub token: String,
+    pub agent_type: String,
+}
+
 /// See [`BrokerMessage::ListAssistants`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerListAssistantsRequest {
     pub token: String,
+    /// The companion names assistants by uid (`bot`). One from before them
+    /// leaves it out, and is sent only the assistants it can name by
+    /// `assistant_id`.
+    #[serde(default)]
+    pub bots: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -569,18 +626,8 @@ impl BrokerCreateSessionRequest {
         {
             return Err("create_session requires mode_id");
         }
-        if !self
-            .config_values
-            .get("model")
-            .is_some_and(|model| !model.trim().is_empty())
-        {
-            return Err("create_session requires config_values.model");
-        }
-        if !["reasoning_effort", "effort", "thought_level"]
-            .iter()
-            .any(|key| self.config_values.contains_key(*key))
-        {
-            return Err("create_session requires a reasoning option in config_values");
+        if self.config_values.len() != 2 {
+            return Err("create_session requires one model and one reasoning option in config_values");
         }
         if self.config_values.values().any(|value| value.trim().is_empty()) {
             return Err("config_values must not contain empty values");
@@ -840,6 +887,28 @@ pub async fn client_ask_round_trip(
     message_round_trip(socket_path, &BrokerMessage::Ask(req.clone())).await
 }
 
+/// Dispatch an authenticated rename request.
+pub async fn client_stop_session_round_trip(
+    socket_path: &str,
+    req: BrokerStopSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::StopSession(req)).await
+}
+
+pub async fn client_rename_session_round_trip(
+    socket_path: &str,
+    req: BrokerRenameSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::RenameSession(req)).await
+}
+
+pub async fn client_session_history_round_trip(
+    socket_path: &str,
+    req: &BrokerSessionHistoryRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionHistory(req.clone())).await
+}
+
 /// Dispatch a `get_session_info` request and read back the serialized
 /// [`crate::acp::session_info::SessionInfo`] envelope (metadata + stats, and the
 /// recent messages when `max_messages > 0`).
@@ -899,6 +968,15 @@ pub async fn client_create_work_task_round_trip(
     req: &BrokerCreateWorkTaskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::CreateWorkTask(req.clone())).await
+}
+
+/// Dispatch one personal-agent tool call and read back the serialized
+/// [`crate::personal_agent::tools::ToolOutcome`].
+pub async fn client_personal_agent_round_trip(
+    socket_path: &str,
+    req: &BrokerPersonalAgentRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::PersonalAgent(req.clone())).await
 }
 
 /// Dispatch a `browser_list_tabs` request and read back the serialized
@@ -1045,6 +1123,13 @@ pub async fn client_computer_act_round_trip(
 /// it is not checked on.
 pub async fn client_ping(socket_path: &str) -> io::Result<BrokerResponse> {
     raw_round_trip(socket_path, &BrokerMessage::Ping).await
+}
+
+pub async fn client_list_agent_options_round_trip(
+    socket_path: &str,
+    req: &BrokerListAgentOptionsRequest,
+) -> std::io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListAgentOptions(req.clone())).await
 }
 
 /// Fetch the assistant roster (see [`BrokerMessage::ListAssistants`]).

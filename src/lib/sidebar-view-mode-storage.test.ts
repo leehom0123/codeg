@@ -12,6 +12,9 @@ import {
   loadSectionOrder,
   loadShowRecent,
   loadTagFilter,
+  loadRecentGroupingMode,
+  saveRecentGroupingMode,
+  RECENT_GROUPING_MODE_KEY,
   moveSectionInOrder,
   normalizeSectionOrder,
   saveNavItemVisibility,
@@ -31,16 +34,34 @@ const NAV_ITEMS_KEY = "workspace:sidebar-nav-items"
 describe("normalizeSectionOrder", () => {
   it("passes a complete order through unchanged", () => {
     expect(
-      normalizeSectionOrder(["recent", "chats", "folders", "btw"])
-    ).toEqual(["recent", "chats", "folders", "btw"])
+      normalizeSectionOrder(["recent", "chats", "assistants", "folders"])
+    ).toEqual(["recent", "chats", "assistants", "folders"])
   })
 
-  it("appends missing sections in default order", () => {
+  it("puts the assistants right above the folders in a store from before them", () => {
+    // A store written before the assistants' section existed gets it where a
+    // new user has it — above the folders — not at the bottom.
+    expect(normalizeSectionOrder(["recent", "chats", "folders"])).toEqual([
+      "recent",
+      "chats",
+      "assistants",
+      "folders",
+    ])
+    expect(normalizeSectionOrder(["folders", "chats", "recent"])).toEqual([
+      "assistants",
+      "folders",
+      "chats",
+      "recent",
+    ])
+  })
+
+  it("appends the other missing sections in default order", () => {
     // Forward compatibility in reverse: a store written before "Recent" existed
     // gets it at the bottom rather than losing the section entirely — and a
     // store from before the btw section gets THAT appended in id order too.
     expect(normalizeSectionOrder(["chats", "folders"])).toEqual([
       "chats",
+      "assistants",
       "folders",
       "btw",
       "recent",
@@ -50,7 +71,7 @@ describe("normalizeSectionOrder", () => {
   it("drops unknown entries and repeats", () => {
     expect(
       normalizeSectionOrder(["recent", "bogus", "recent", 7, null, "chats"])
-    ).toEqual(["recent", "chats", "folders", "btw"])
+    ).toEqual(["recent", "chats", "assistants", "folders"])
   })
 
   it("migrates the legacy two-way strings, preserving the user's choice", () => {
@@ -59,6 +80,7 @@ describe("normalizeSectionOrder", () => {
     // older recent rather than jumping into its default slot.
     expect(normalizeSectionOrder("chats-first")).toEqual([
       "chats",
+      "assistants",
       "folders",
       "recent",
       "btw",
@@ -68,7 +90,8 @@ describe("normalizeSectionOrder", () => {
     )
   })
 
-  it("falls back to the default for anything unusable", () => {
+  it("falls back to the default — the assistants first — for anything unusable", () => {
+    expect(DEFAULT_SECTION_ORDER[0]).toBe("assistants")
     expect(normalizeSectionOrder(undefined)).toEqual(DEFAULT_SECTION_ORDER)
     expect(normalizeSectionOrder("nonsense")).toEqual(DEFAULT_SECTION_ORDER)
     expect(normalizeSectionOrder({ folders: 1 })).toEqual(DEFAULT_SECTION_ORDER)
@@ -113,19 +136,34 @@ describe("section-order persistence", () => {
   beforeEach(() => localStorage.clear())
 
   it("round-trips through localStorage", () => {
-    saveSectionOrder(["recent", "folders", "chats", "btw"])
-    expect(loadSectionOrder()).toEqual(["recent", "folders", "chats", "btw"])
+    saveSectionOrder(["recent", "folders", "assistants", "chats"])
+    expect(loadSectionOrder()).toEqual([
+      "recent",
+      "folders",
+      "assistants",
+      "chats",
+    ])
   })
 
-  it("defaults to Folders → Chat → btw → Recent with nothing stored", () => {
-    expect(loadSectionOrder()).toEqual(["folders", "chats", "btw", "recent"])
+  it("defaults to Assistants → Folders → Chat → Recent with nothing stored", () => {
+    expect(loadSectionOrder()).toEqual([
+      "assistants",
+      "folders",
+      "chats",
+      "recent",
+    ])
   })
 
   it("migrates a legacy bare string left by an older build", () => {
     // The old format was not JSON, so the loader must survive the parse failure
     // rather than resetting the user's preference.
     localStorage.setItem(SECTION_ORDER_KEY, "chats-first")
-    expect(loadSectionOrder()).toEqual(["chats", "folders", "recent", "btw"])
+    expect(loadSectionOrder()).toEqual([
+      "chats",
+      "assistants",
+      "folders",
+      "recent",
+    ])
   })
 
   it("falls back to the default for corrupt JSON", () => {
@@ -195,6 +233,7 @@ describe("sidebar nav items", () => {
   beforeEach(() => localStorage.clear())
 
   it("lists the route rows top to bottom, Harness after the canvas", () => {
+    // The assistants have a section of their own, no row here.
     expect(SIDEBAR_NAV_ITEM_IDS).toEqual([
       "automations",
       "tasks",
@@ -306,5 +345,27 @@ describe("tag filter persistence", () => {
       JSON.stringify({ tagIds: [4, "x", 4, 9], mode: "weird" })
     )
     expect(loadTagFilter()).toEqual({ tagIds: [4, 9], mode: "any" })
+  })
+})
+
+describe("recentGroupingMode storage", () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it("defaults to time when empty", () => {
+    expect(loadRecentGroupingMode()).toBe("time")
+  })
+
+  it("round-trips flat and time", () => {
+    saveRecentGroupingMode("flat")
+    expect(loadRecentGroupingMode()).toBe("flat")
+    saveRecentGroupingMode("time")
+    expect(loadRecentGroupingMode()).toBe("time")
+  })
+
+  it("ignores garbage values", () => {
+    localStorage.setItem(RECENT_GROUPING_MODE_KEY, "not-a-valid-mode")
+    expect(loadRecentGroupingMode()).toBe("time")
   })
 })

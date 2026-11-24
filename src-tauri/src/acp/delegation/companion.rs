@@ -48,6 +48,7 @@ use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
     MAX_WORK_TASK_ATTACHMENTS,
 };
+use crate::acp::delegation::transport::{client_list_agent_options_round_trip, BrokerListAgentOptionsRequest};
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_browser_act_round_trip, client_browser_capture_round_trip,
     client_browser_console_round_trip, client_browser_eval_round_trip,
@@ -59,23 +60,24 @@ use crate::acp::delegation::transport::{
     client_computer_verify_round_trip, client_computer_windows_round_trip,
     client_create_automation_round_trip, client_create_work_task_round_trip,
     client_feedback_round_trip, client_list_assistants_round_trip, client_ping,
-    client_result_schema_round_trip, client_resume_task_round_trip, client_round_trip,
-    client_session_round_trip, client_status_round_trip, client_submit_result_round_trip,
-    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
-    BrokerBrowserActRequest, BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest,
-    BrokerBrowserEvalRequest, BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest,
-    BrokerBrowserTabsRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
-    BrokerCommitFeedbackRequest, BrokerComputerActRequest, BrokerComputerAppsRequest,
-    BrokerComputerCaptureRequest, BrokerComputerClipboardRequest, BrokerComputerLaunchRequest,
-    BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest, BrokerComputerWindowsRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerListAssistantsRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
-    BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
+    client_rename_session_round_trip, client_result_schema_round_trip,
+    client_resume_task_round_trip, client_round_trip, client_session_round_trip,
+    client_status_round_trip, client_submit_result_round_trip, client_task_complete_round_trip,
+    client_task_progress_round_trip, BrokerAskRequest, BrokerBrowserActRequest,
+    BrokerBrowserCaptureRequest, BrokerBrowserConsoleRequest, BrokerBrowserEvalRequest,
+    BrokerBrowserSnapshotRequest, BrokerBrowserTabOpRequest, BrokerBrowserTabsRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
+    BrokerComputerClipboardRequest, BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest,
+    BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
+    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest,
+    BrokerRenameSessionRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
+    BrokerResumeTaskRequest, BrokerSessionHistoryRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
 use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::question::parse_questions;
-use crate::acp::session_info::MAX_SESSION_MESSAGES;
+use crate::acp::session_info::{SessionHistoryOptions, MAX_SESSION_MESSAGES};
 use crate::models::AutomationAction;
 
 /// Upper bound on one broker-side cancel round-trip. Bounds both
@@ -177,6 +179,11 @@ pub struct CompanionFeatures {
     pub automations: bool,
     /// `create_work_task` — queue a card on the work-task board from chat.
     pub taskboard: bool,
+    /// The personal agent's tools (`assistant_list`, `project_list`,
+    /// `dispatch`, `dispatch_followup`, `item_list`, `item_read`,
+    /// `item_update`, `timeline_read`) — injected only into the personal
+    /// agent's own connection, which the app re-checks on every call.
+    pub personal_agent: bool,
     /// The built-in browser's agent surface: `browser_list_tabs` /
     /// `browser_snapshot` / `browser_console_messages` / `browser_screenshot`,
     /// the five action tools (`browser_click`, `browser_hover`,
@@ -236,6 +243,7 @@ impl CompanionFeatures {
                 result: false,
                 automations: false,
                 taskboard: false,
+                personal_agent: false,
                 browser: false,
                 browser_eval: false,
                 computer: false,
@@ -253,6 +261,7 @@ impl CompanionFeatures {
             result: false,
             automations: false,
             taskboard: false,
+            personal_agent: false,
             browser: false,
             browser_eval: false,
             computer: false,
@@ -270,6 +279,7 @@ impl CompanionFeatures {
                 "result" => f.result = true,
                 "automations" => f.automations = true,
                 "taskboard" => f.taskboard = true,
+                "personal_agent" => f.personal_agent = true,
                 "browser" => f.browser = true,
                 "browser_eval" => f.browser_eval = true,
                 "computer" => f.computer = true,
@@ -286,15 +296,56 @@ impl CompanionFeatures {
         match name {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
-            "get_session_info" => self.sessions,
+            "get_session_info" | "rename_session" | "read_session_history" => self.sessions,
             "task_progress" | "task_complete" => self.tasks,
             "submit_result" => self.result,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
-            "browser_list_tabs" | "browser_snapshot" | "browser_console_messages"
-            | "browser_screenshot" | "browser_click" | "browser_hover" | "browser_type"
-            | "browser_press_key" | "browser_select_option" | "browser_open_tab"
-            | "browser_navigate" | "browser_close_tab" => self.browser,
+            "project_list"
+            | "dispatch"
+            | "dispatch_followup"
+            | "dispatch_answer"
+            | "item_list"
+            | "item_read"
+            | "item_update"
+            | "timeline_read"
+            | "bot_list"
+            | "bot_message"
+            | "prefs_update"
+            | "bot_create"
+            | "overview"
+            | "board_status"
+            | "session_list"
+            | "automation_status"
+            | "pr_status"
+            | "usage_summary"
+            | "activity_summary"
+            | "acceptance_decide"
+            | "forge_comment"
+            | "issue_close"
+            | "pr_merge"
+            | "bot_update"
+            | "routine_list"
+            | "routine_create"
+            | "routine_update"
+            | "wrap_up"
+            | "history_search"
+            | "pr_feedback_forward"
+            | "plan_create"
+            | "plan_update"
+            | "plan_read" => self.personal_agent,
+            "browser_list_tabs"
+            | "browser_snapshot"
+            | "browser_console_messages"
+            | "browser_screenshot"
+            | "browser_click"
+            | "browser_hover"
+            | "browser_type"
+            | "browser_press_key"
+            | "browser_select_option"
+            | "browser_open_tab"
+            | "browser_navigate"
+            | "browser_close_tab" => self.browser,
             // Both, so a `--features browser_eval` with no `browser` — a
             // parent bug, or someone editing the agent's MCP config by hand —
             // cannot leave the strongest tool as the only one present.
@@ -319,11 +370,12 @@ impl CompanionFeatures {
             "computer_clipboard_read" | "computer_clipboard_write" => {
                 self.computer && self.computer_clipboard
             }
+            "list_agent_options" => self.delegation || self.session_messaging,
             "delegate_to_agent"
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
-            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" => {
+            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" | "stop_session" => {
                 self.session_messaging
             }
             _ => false,
@@ -452,37 +504,54 @@ const TOOLS_LIST_ASSISTANT_BUDGET: Duration = Duration::from_secs(2);
 /// process); [`AssistantSupport::Unknown`] is probed again next time.
 #[derive(Debug, Clone, Default)]
 pub struct AssistantSupportProbe {
-    known: Arc<Mutex<Option<bool>>>,
+    /// `(assistants, bots)`: whether the listener takes `assistant_id`, and
+    /// whether it takes `bot` (the owner's assistants by uid).
+    known: Arc<Mutex<Option<(bool, bool)>>>,
+}
+
+fn support_of(supported: bool) -> AssistantSupport {
+    if supported {
+        AssistantSupport::Supported
+    } else {
+        AssistantSupport::Unsupported
+    }
 }
 
 impl AssistantSupportProbe {
-    /// The current answer, probing the listener when none is known yet.
-    pub async fn resolve(&self, socket_path: &str) -> AssistantSupport {
+    /// The current answers, probing the listener when none is known yet.
+    async fn answers(&self, socket_path: &str) -> Option<(bool, bool)> {
         let mut known = self.known.lock().await;
-        if let Some(supported) = *known {
-            return if supported {
-                AssistantSupport::Supported
-            } else {
-                AssistantSupport::Unsupported
-            };
+        if let Some(answers) = *known {
+            return Some(answers);
         }
-        match probe_assistant_support(socket_path).await {
-            Some(supported) => {
-                *known = Some(supported);
-                if supported {
-                    AssistantSupport::Supported
-                } else {
-                    AssistantSupport::Unsupported
-                }
-            }
+        let answers = probe_assistant_support(socket_path).await?;
+        *known = Some(answers);
+        Some(answers)
+    }
+
+    /// Whether the listener takes `assistant_id`, probing it when none is
+    /// known yet.
+    pub async fn resolve(&self, socket_path: &str) -> AssistantSupport {
+        match self.answers(socket_path).await {
+            Some((assistants, _)) => support_of(assistants),
+            None => AssistantSupport::Unknown,
+        }
+    }
+
+    /// Whether the listener takes `bot` — one of the owner's assistants by
+    /// uid. A listener from before them reads only `assistant_id` and
+    /// `agent_type`, and would run a `bot` call on the bare agent.
+    pub async fn resolve_bots(&self, socket_path: &str) -> AssistantSupport {
+        match self.answers(socket_path).await {
+            Some((_, bots)) => support_of(bots),
             None => AssistantSupport::Unknown,
         }
     }
 }
 
-/// `Some(true/false)` for a listener that answered `Ping`, `None` for no
-/// answer at all.
-async fn probe_assistant_support(socket_path: &str) -> Option<bool> {
+/// `Some((assistants, bots))` for a listener that answered `Ping`, `None`
+/// for no answer at all.
+async fn probe_assistant_support(socket_path: &str) -> Option<(bool, bool)> {
     let resp = tokio::time::timeout(ASSISTANT_PROBE_BUDGET, client_ping(socket_path))
         .await
         .ok()?
@@ -490,7 +559,8 @@ async fn probe_assistant_support(socket_path: &str) -> Option<bool> {
     if resp.outcome.get("ok").and_then(Value::as_bool) != Some(true) {
         return None;
     }
-    Some(resp.outcome.get("assistants").and_then(Value::as_bool) == Some(true))
+    let flag = |k: &str| resp.outcome.get(k).and_then(Value::as_bool) == Some(true);
+    Some((flag("assistants"), flag("bots")))
 }
 
 /// Per-in-flight-call state. The companion stashes one of these per
@@ -675,8 +745,11 @@ pub async fn dispatch_line(
                 ),
                 None => all,
             };
+            if ctx.features.personal_agent {
+                offer_for_on_ask(&mut tools);
+            }
             remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
-            append_custom_agents_to_delegate_enum(&mut tools, &ctx.custom_agents);
+            append_custom_agents_to_creation_tools(&mut tools, &ctx.custom_agents);
             if ctx.features.allows_tool("delegate_to_agent") {
                 offer_assistants_in_delegate_schema(ctx, &mut tools).await;
             }
@@ -735,24 +808,31 @@ fn remove_disabled_agents_from_delegate_enum(tools: &mut Value, disabled_agents:
 /// schema shape change) leaves the tools untouched rather than erroring —
 /// serving the narrower built-in enum is strictly better than serving no
 /// tools at all.
-fn append_custom_agents_to_delegate_enum(tools: &mut Value, custom_agents: &[String]) {
+fn append_custom_agents_to_creation_tools(tools: &mut Value, custom_agents: &[String]) {
     if custom_agents.is_empty() {
         return;
     }
     let Some(arr) = tools.as_array_mut() else {
         return;
     };
-    let Some(variants) = arr
-        .iter_mut()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("delegate_to_agent"))
-        .and_then(|t| t.pointer_mut("/inputSchema/properties/agent_type/enum"))
-        .and_then(|e| e.as_array_mut())
-    else {
-        return;
-    };
-    for slug in custom_agents {
-        if !variants.iter().any(|v| v.as_str() == Some(slug)) {
-            variants.push(Value::String(slug.clone()));
+    for tool in arr.iter_mut().filter(|tool| {
+        matches!(
+            tool.get("name").and_then(Value::as_str),
+            Some("delegate_to_agent" | "create_session")
+        )
+    }) {
+        if let Some(variants) = tool
+            .pointer_mut("/inputSchema/properties/agent_type/enum")
+            .and_then(Value::as_array_mut)
+        {
+            for slug in custom_agents {
+                if !variants
+                    .iter()
+                    .any(|variant| variant.as_str() == Some(slug))
+                {
+                    variants.push(Value::String(slug.clone()));
+                }
+            }
         }
     }
 }
@@ -770,23 +850,30 @@ async fn offer_assistants_in_delegate_schema(ctx: &CompanionContext, tools: &mut
     let lookup = async {
         match ctx.assistant_support.resolve(&ctx.socket_path).await {
             AssistantSupport::Unsupported => None,
-            AssistantSupport::Unknown => Some(None),
-            AssistantSupport::Supported => Some(fetch_assistant_roster(ctx).await),
+            AssistantSupport::Unknown => Some((None, true)),
+            AssistantSupport::Supported => {
+                // `bot` only for a listener that takes it: one from before
+                // the owner's assistants keeps `assistant_id` alone.
+                let bots = ctx.assistant_support.resolve_bots(&ctx.socket_path).await
+                    != AssistantSupport::Unsupported;
+                Some((fetch_assistant_roster(ctx).await, bots))
+            }
         }
     };
-    let roster = match tokio::time::timeout(TOOLS_LIST_ASSISTANT_BUDGET, lookup).await {
+    let (roster, bots) = match tokio::time::timeout(TOOLS_LIST_ASSISTANT_BUDGET, lookup).await {
         Ok(None) => return,
-        Ok(Some(roster)) => roster,
-        // Out of time: offer the parameter without a roster — calls by id do
-        // not depend on it.
-        Err(_) => None,
+        Ok(Some(found)) => found,
+        // Out of time: offer the parameters without a roster — calls by uid
+        // do not depend on it.
+        Err(_) => (None, true),
     };
-    describe_assistants_in_delegate_schema(tools, roster.as_deref());
+    describe_assistants_in_delegate_schema(tools, roster.as_deref(), bots);
 }
 
 async fn fetch_assistant_roster(ctx: &CompanionContext) -> Option<Vec<AssistantRosterEntry>> {
     let req = BrokerListAssistantsRequest {
         token: ctx.token.clone(),
+        bots: true,
     };
     let resp = client_list_assistants_round_trip(&ctx.socket_path, &req)
         .await
@@ -797,13 +884,36 @@ async fn fetch_assistant_roster(ctx: &CompanionContext) -> Option<Vec<AssistantR
     serde_json::from_value(resp.outcome.get("assistants")?.clone()).ok()
 }
 
-/// Sentence appended to `delegate_to_agent`'s description: how an assistant
-/// mention looks, and what to do with one.
+/// Sentence appended to `delegate_to_agent`'s description (a listener from
+/// before the owner's assistants): how an assistant mention looks, and what
+/// to do with one.
 pub(crate) const ASSISTANT_MENTION_SENTENCE: &str = " A user-defined ASSISTANT is named the \
 same way — `@AssistantName` or `[@AssistantName](codeg://assistant/<number>)` — and that \
 mention is likewise an explicit instruction to delegate to it: pass `assistant_id` set to that \
 number and leave `agent_type` out. An assistant brings its own agent, options and standing \
 instructions.";
+
+/// The same, once the listener takes `bot`: the owner's assistants are named
+/// by uid, an old `codeg://assistant/<number>` link still by its number.
+pub(crate) const BOT_MENTION_SENTENCE: &str = " One of the user's ASSISTANTS is named the \
+same way — `@AssistantName` or `[@AssistantName](codeg://bot/<uid>)` — and that mention is \
+likewise an explicit instruction to delegate to it: pass `bot` set to that uid and leave \
+`agent_type` out (an older `[@Name](codeg://assistant/<number>)` link: pass `assistant_id` set \
+to that number). An assistant brings its own agent, options and standing instructions.";
+
+/// Prefix put on `agent_type`'s description once `bot` exists.
+pub(crate) const AGENT_TYPE_UNLESS_BOT: &str = "Required unless `bot` (or `assistant_id`) is given. ";
+
+/// `bot`'s description, before the roster sentence.
+pub(crate) const BOT_DESCRIPTION: &str = "Delegate to one of the user's assistants instead of \
+picking an agent yourself. Take the uid from a `codeg://bot/<uid>` link in the user's message \
+(e.g. `codeg://bot/9f2c` means \"9f2c\"). When set, `agent_type` is ignored: the assistant decides \
+which agent runs, with which options and instructions.";
+
+/// `assistant_id`'s description beside `bot`: for an old link only.
+pub(crate) const LEGACY_ASSISTANT_ID_DESCRIPTION: &str = "Only for an older \
+`codeg://assistant/<number>` link in the user's message (e.g. `codeg://assistant/3` means 3): \
+the assistant it names. Use `bot` for every other assistant.";
 
 /// Prefix put on `agent_type`'s description once `assistant_id` exists.
 pub(crate) const AGENT_TYPE_UNLESS_ASSISTANT: &str = "Required unless `assistant_id` is given. ";
@@ -824,6 +934,7 @@ assistant decides which agent runs, with which options and instructions.";
 fn describe_assistants_in_delegate_schema(
     tools: &mut Value,
     roster: Option<&[AssistantRosterEntry]>,
+    bots: bool,
 ) {
     let Some(tool) = tools.as_array_mut().and_then(|arr| {
         arr.iter_mut()
@@ -837,30 +948,61 @@ fn describe_assistants_in_delegate_schema(
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
     };
+    let prefix = if bots {
+        AGENT_TYPE_UNLESS_BOT
+    } else {
+        AGENT_TYPE_UNLESS_ASSISTANT
+    };
     if let Some(Value::String(description)) = properties
         .get_mut("agent_type")
         .and_then(|p| p.get_mut("description"))
     {
-        if !description.starts_with(AGENT_TYPE_UNLESS_ASSISTANT) {
-            description.insert_str(0, AGENT_TYPE_UNLESS_ASSISTANT);
+        if !description.starts_with(prefix) {
+            description.insert_str(0, prefix);
         }
     }
-    let mut id_description = ASSISTANT_ID_DESCRIPTION.to_string();
-    if let Some(roster) = roster {
-        id_description.push_str(&roster_for_schema(roster));
+    if bots {
+        let mut bot_description = BOT_DESCRIPTION.to_string();
+        if let Some(roster) = roster {
+            bot_description.push_str(&roster_for_schema(roster));
+        }
+        properties.insert(
+            "bot".to_string(),
+            json!({ "type": "string", "description": bot_description }),
+        );
+        properties.insert(
+            "assistant_id".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": LEGACY_ASSISTANT_ID_DESCRIPTION,
+            }),
+        );
+    } else {
+        // A listener from before the owner's assistants: its roster is of
+        // its own assistants, by id.
+        let mut id_description = ASSISTANT_ID_DESCRIPTION.to_string();
+        if let Some(roster) = roster {
+            id_description.push_str(&roster_for_schema(roster));
+        }
+        properties.insert(
+            "assistant_id".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "description": id_description,
+            }),
+        );
     }
-    properties.insert(
-        "assistant_id".to_string(),
-        json!({
-            "type": "integer",
-            "minimum": 1,
-            "description": id_description,
-        }),
-    );
     schema.insert("required".to_string(), json!(["task"]));
+    let sentence = if bots {
+        BOT_MENTION_SENTENCE
+    } else {
+        ASSISTANT_MENTION_SENTENCE
+    };
     if let Some(Value::String(description)) = tool.get_mut("description") {
-        if !description.ends_with(ASSISTANT_MENTION_SENTENCE) {
-            description.push_str(ASSISTANT_MENTION_SENTENCE);
+        if !description.ends_with(sentence) {
+            description.push_str(sentence);
         }
     }
 }
@@ -903,6 +1045,34 @@ async fn build_tools_call_spawn(
         return LineAction::Respond(err(id, -32602, format!("unknown tool: {name}")));
     }
     match name.as_str() {
+        "list_agent_options" => {
+            let agent_type = match arguments.get("agent_type").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() => value.to_owned(),
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        "list_agent_options requires agent_type",
+                    ))
+                }
+            };
+            if arguments.as_object().is_some_and(|args| args.len() != 1) {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "list_agent_options accepts only agent_type",
+                ));
+            }
+            let request = BrokerListAgentOptionsRequest {
+                token: ctx.token.clone(),
+                agent_type,
+            };
+            let round_trip =
+                Box::pin(
+                    async move { client_list_agent_options_round_trip(&socket, &request).await },
+                );
+            register_and_spawn(inflight, id, None, round_trip, render_agent_options_result).await
+        }
         "delegate_to_agent" => {
             // MCP clients (Codex / Claude Code) generally do NOT populate
             // `_meta.tool_use_id` when calling an MCP server. We still surface it
@@ -919,13 +1089,23 @@ async fn build_tools_call_spawn(
             // Mint an external_handle so a `notifications/cancelled` during setup
             // tears down the just-started child via `cancel_by_external_handle`.
             let external_handle = uuid::Uuid::new_v4().to_string();
-            // Any `assistant_id` at all — even one the listener would refuse
-            // as invalid — makes this an assistant call, which is forwarded
-            // only to a parent known to understand it (see
-            // `AssistantSupport`). Agent calls are never held up by the probe.
-            let names_assistant = arguments
-                .get("assistant_id")
-                .is_some_and(|v| !v.is_null());
+            // What the call names, by the listener's own parser: a `bot` (or
+            // one the listener would refuse as invalid) is forwarded only to a
+            // parent known to take `bot`, an `assistant_id` only to one known
+            // to take that (see `AssistantSupport`) — never to one that would
+            // drop it and run the bare agent. Agent calls are never held up
+            // by the probe.
+            use crate::acp::delegation::types::{
+                delegation_target_from_args, DelegationTarget, DelegationTargetError,
+            };
+            let needs = match delegation_target_from_args(&arguments) {
+                Ok(DelegationTarget::Bot(_)) | Err(DelegationTargetError::InvalidBot(_)) => {
+                    Some(true)
+                }
+                Ok(DelegationTarget::Assistant(_))
+                | Err(DelegationTargetError::InvalidAssistantId(_)) => Some(false),
+                _ => None,
+            };
             let support = ctx.assistant_support.clone();
             let req = BrokerRequest {
                 token: ctx.token.clone(),
@@ -935,8 +1115,13 @@ async fn build_tools_call_spawn(
                 input: arguments,
             };
             let round_trip = Box::pin(async move {
-                if names_assistant {
-                    match support.resolve(&socket).await {
+                if let Some(bot) = needs {
+                    let answer = if bot {
+                        support.resolve_bots(&socket).await
+                    } else {
+                        support.resolve(&socket).await
+                    };
+                    match answer {
                         AssistantSupport::Supported => {}
                         AssistantSupport::Unsupported => {
                             return Ok(local_delegation_refusal(
@@ -1081,6 +1266,16 @@ async fn build_tools_call_spawn(
             let req = BrokerAskRequest {
                 token: ctx.token.clone(),
                 questions,
+                // Only a personal assistant's tool offers it.
+                for_input: if ctx.features.personal_agent {
+                    arguments.get("for").and_then(|v| match v {
+                        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                        Value::Number(n) => Some(n.to_string()),
+                        _ => None,
+                    })
+                } else {
+                    None
+                },
             };
             // No external_handle: canceling a blocking ask only suppresses its
             // response. The companion dropping the round-trip future closes the
@@ -1088,6 +1283,76 @@ async fn build_tools_call_spawn(
             // pending question down — no broker-side cancel to dispatch.
             let round_trip = Box::pin(async move { client_ask_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_ask_result).await
+        }
+        "stop_session" => {
+            let session_id = match optional_session_id(&arguments) {
+                Ok(id) => id,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let req = super::transport::BrokerStopSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+            };
+            let round_trip = Box::pin(async move {
+                super::transport::client_stop_session_round_trip(&socket, req).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_control_result).await
+        }
+        "rename_session" => {
+            let Some(title) = arguments
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+            else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "rename_session requires a non-empty title",
+                ));
+            };
+            let session_id = match optional_session_id(&arguments) {
+                Ok(id) => id,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let req = BrokerRenameSessionRequest {
+                token: ctx.token.clone(),
+                session_id,
+                title: title.to_owned(),
+            };
+            let round_trip =
+                Box::pin(async move { client_rename_session_round_trip(&socket, req).await });
+            register_and_spawn(inflight, id, None, round_trip, render_session_control_result).await
+        }
+        "read_session_history" => {
+            let Some(session_id) = parse_session_id(&arguments) else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "read_session_history requires an integer session_id",
+                ));
+            };
+            let options = match serde_json::from_value::<SessionHistoryOptions>(arguments.clone()) {
+                Ok(options) if options.limit > 0 => options,
+                _ => return LineAction::Respond(err(id, -32602,
+                    "History options require limit >= 1, string before/query, boolean include_tools, and non-negative integer max_chars")),
+            };
+            let req = BrokerSessionHistoryRequest {
+                token: ctx.token.clone(),
+                session_id,
+                options,
+            };
+            let round_trip = Box::pin(async move {
+                super::transport::client_session_history_round_trip(&socket, &req).await
+            });
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_session_history_result,
+            )
+            .await
         }
         "get_session_info" => {
             // `session_id` is the codeg conversation id the agent read out of a
@@ -1547,6 +1812,65 @@ async fn build_tools_call_spawn(
                 Box::pin(async move { client_create_work_task_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
         }
+        "project_list"
+        | "dispatch"
+        | "dispatch_followup"
+        | "dispatch_answer"
+        | "item_list"
+        | "item_read"
+        | "item_update"
+        | "timeline_read"
+        | "bot_list"
+        | "bot_message"
+        | "prefs_update"
+        | "bot_create"
+        | "overview"
+        | "board_status"
+        | "session_list"
+        | "automation_status"
+        | "pr_status"
+        | "usage_summary"
+        | "activity_summary"
+        | "acceptance_decide"
+        | "forge_comment"
+        | "issue_close"
+        | "pr_merge"
+        | "bot_update"
+        | "routine_list"
+        | "routine_create"
+        | "routine_update"
+        | "wrap_up"
+        | "history_search"
+        | "pr_feedback_forward"
+        | "plan_create"
+        | "plan_update"
+        | "plan_read" => {
+            // Shape only: the app owns every rule (which assistants exist,
+            // which projects may be targeted, which states allow a
+            // follow-up), so the companion forwards the arguments as given.
+            let arguments = match arguments {
+                Value::Object(_) => arguments,
+                Value::Null => json!({}),
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        format!("{name} takes an object of arguments"),
+                    ))
+                }
+            };
+            let req = crate::acp::delegation::transport::BrokerPersonalAgentRequest {
+                token: ctx.token.clone(),
+                tool: name.clone(),
+                arguments,
+            };
+            let round_trip = Box::pin(async move {
+                crate::acp::delegation::transport::client_personal_agent_round_trip(&socket, &req)
+                    .await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_personal_agent_result)
+                .await
+        }
         other => LineAction::Respond(err(id, -32602, format!("unknown tool: {other}"))),
     }
 }
@@ -1848,6 +2172,14 @@ fn normalize_status_task_ids(arguments: &Value) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+fn render_agent_options_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": outcome.to_string()}],
+        "structuredContent": outcome,
+        "isError": outcome.get("error").is_some(),
+    })
+}
+
 /// Render the `get_delegation_status` round-trip outcome (always a
 /// `{ "tasks": [..] }` envelope from the broker) into an MCP `tools/call`
 /// result. EVERY poll renders through [`render_batch_report`] — a single id and
@@ -2029,6 +2361,35 @@ fn render_feedback_result_with_streak(outcome: &Value, empty_streak: Option<u32>
             "hint": hint,
         },
     })
+}
+
+/// A personal assistant's `ask_user_question` takes `for`: the input of its
+/// turn the question is for, so the question also shows in the conversation
+/// that input came from. Not in the embedded schema: no other agent has
+/// inputs to name.
+fn offer_for_on_ask(tools: &mut Value) {
+    let Some(list) = tools.as_array_mut() else {
+        return;
+    };
+    for t in list.iter_mut() {
+        if t.get("name").and_then(|n| n.as_str()) != Some("ask_user_question") {
+            continue;
+        }
+        if let Some(props) = t
+            .pointer_mut("/inputSchema/properties")
+            .and_then(|p| p.as_object_mut())
+        {
+            props.insert(
+                "for".into(),
+                json!({
+                    "type": "string",
+                    "description": "The input of this turn the question is for — its id as the \
+                                    delivery shows it (#58, m12). Needed only when the turn carries \
+                                    inputs from more than one source."
+                }),
+            );
+        }
+    }
 }
 
 /// Map the `ask_user_question` round-trip outcome (a `{ answers, declined }`
@@ -2232,6 +2593,16 @@ fn truncate_chars(s: &str, cap: usize) -> String {
     crate::acp::chat_authoring::truncate_chars(s, cap)
 }
 
+fn optional_session_id(arguments: &Value) -> Result<Option<i32>, &'static str> {
+    if arguments.get("session_id").is_none() {
+        return Ok(None);
+    }
+    parse_session_id(arguments)
+        .filter(|id| *id > 0)
+        .map(Some)
+        .ok_or("session_id must be a positive conversation ID")
+}
+
 /// Extract the `session_id` integer from the `get_session_info` arguments,
 /// tolerating a JSON number (int or whole float) or a numeric string — some MCP
 /// hosts stringify integer args. `None` for missing / non-integer / out-of-range,
@@ -2278,6 +2649,24 @@ fn parse_max_messages(arguments: &Value) -> u32 {
         Some(n) => n.min(u64::from(MAX_SESSION_MESSAGES)) as u32,
         None => DEFAULT_MAX_MESSAGES,
     }
+}
+
+fn render_session_control_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": outcome.to_string()}],
+        "structuredContent": outcome,
+        "isError": outcome.get("error").is_some(),
+    })
+}
+
+/// JSON text keeps IDs, paging flags, tool previews, and truncation visible on
+/// hosts that do not surface structuredContent. Do not duplicate the history
+/// into structuredContent: max_chars covers one returned history envelope.
+pub fn render_session_history_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": outcome.to_string() }],
+        "isError": false,
+    })
 }
 
 /// Map the `get_session_info` round-trip outcome (a serialized
@@ -4444,6 +4833,25 @@ pub fn render_authoring_result(outcome: &Value) -> Value {
     })
 }
 
+/// Map a personal-agent tool outcome (a serialized
+/// [`crate::personal_agent::tools::ToolOutcome`]) into an MCP `tools/call`
+/// result. The text rides in `content` and the whole outcome in
+/// `structuredContent`, because hosts read one or the other. A refusal is not
+/// a tool error: the model reads why and corrects the call.
+pub fn render_personal_agent_result(outcome: &Value) -> Value {
+    let text = outcome
+        .get("text")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or("No answer was reported.")
+        .to_string();
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
 /// Build the human-readable summary block for a found session: a metadata header
 /// plus, when present, a "Recent messages" section.
 fn render_session_summary_text(o: &Value) -> String {
@@ -4488,6 +4896,17 @@ fn render_session_summary_text(o: &Value) -> String {
         .and_then(|v| v.as_u64())
     {
         out.push_str(&format!("Total tokens: {tokens}\n"));
+    }
+    if let Some(collaborators) = o.get("collaborators").and_then(Value::as_array).filter(|rows| !rows.is_empty()) {
+        out.push_str("Independent collaboration sessions:\n");
+        for row in collaborators {
+            let id = row.get("session_id").and_then(Value::as_i64).unwrap_or(0);
+            let status = row.get("status").and_then(Value::as_str).unwrap_or("unknown");
+            out.push_str(&format!("- session #{id}: status={status}\n"));
+        }
+        if o.get("collaborators_truncated").and_then(Value::as_bool) == Some(true) {
+            out.push_str("Additional collaboration sessions omitted (limit 200).\n");
+        }
     }
     if let Some(note) = s("note") {
         out.push_str(&format!("Note: {note}\n"));
@@ -4612,6 +5031,7 @@ mod tests {
             result: false,
             automations: false,
             taskboard: false,
+            personal_agent: false,
             browser: false,
             browser_eval: false,
             computer: false,
@@ -4659,19 +5079,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_four_delegation_tools() {
+    async fn tools_list_returns_delegation_tools_and_agent_options() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let resp = unwrap_respond(dispatch_for_test(line).await);
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"delegate_to_agent"));
-        assert!(names.contains(&"get_delegation_status"));
-        assert!(names.contains(&"cancel_delegation"));
-        assert!(names.contains(&"resume_delegation"));
-        assert!(!names.contains(&"send_to_session"));
-        assert!(!names.contains(&"create_session"));
+        assert_eq!(
+            names,
+            [
+                "delegate_to_agent",
+                "list_agent_options",
+                "get_delegation_status",
+                "cancel_delegation",
+                "resume_delegation",
+            ]
+        );
         // resume_delegation requires only task_id; reason is optional and
         // there is deliberately NO task-text parameter (no new iterations).
         let resume = tools
@@ -5246,6 +5669,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5262,6 +5686,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5278,6 +5703,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5294,6 +5720,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5339,7 +5766,6 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 4);
     }
 
     #[tokio::test]
@@ -5348,7 +5774,6 @@ mod tests {
             dispatch_with_features(BOTH, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 5);
     }
 
     #[tokio::test]
@@ -5763,7 +6188,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"get_session_info".to_string()));
-        // sessions feature on → exactly that one tool surfaces.
+        // The sessions group exposes lookup, history, and rename.
         let names = list_tool_names(
             dispatch_with_features(
                 SESSIONS_ONLY,
@@ -5771,7 +6196,77 @@ mod tests {
             )
             .await,
         );
-        assert_eq!(names, vec!["get_session_info".to_string()]);
+        assert_eq!(
+            names,
+            vec!["rename_session".to_string(), "get_session_info".to_string(), "read_session_history".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_session_validates_arguments_and_uses_sessions_gate() {
+        for arguments in [
+            json!({"title": "New title"}),
+            json!({"session_id": 42, "title": "Child"}),
+        ] {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+                "params": {"name": "rename_session", "arguments": arguments}
+            })
+            .to_string();
+            assert!(matches!(
+                dispatch_with_features(SESSIONS_ONLY, &line).await,
+                LineAction::Spawn(_)
+            ));
+            assert!(matches!(
+                dispatch_for_test(&line).await,
+                LineAction::Respond(_)
+            ));
+        }
+        for arguments in [
+            json!({}),
+            json!({"title": "   "}),
+            json!({"title": 3}),
+            json!({"session_id": "bad", "title": "Name"}),
+            json!({"session_id": 0, "title": "Name"}),
+        ] {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+                "params": {"name": "rename_session", "arguments": arguments}
+            })
+            .to_string();
+            match dispatch_with_features(SESSIONS_ONLY, &line).await {
+                LineAction::Respond(response) => assert_eq!(response.error.unwrap().code, -32602),
+                _ => panic!("invalid rename arguments must be rejected"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn read_session_history_dispatch_and_gate() {
+        let line = json!({"jsonrpc":"2.0", "id":31, "method":"tools/call",
+            "params":{"name":"read_session_history", "arguments":{"session_id":"214", "before":"original-turn", "query":"needle", "include_tools":true}}}).to_string();
+        assert!(matches!(
+            dispatch_with_features(SESSIONS_ONLY, &line).await,
+            LineAction::Spawn(_)
+        ));
+        let error = unwrap_respond(dispatch_for_test(&line).await).error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("unknown tool"));
+        for args in [
+            json!({}),
+            json!({"session_id":1,"limit":0}),
+            json!({"session_id":1,"before":3}),
+            json!({"session_id":1,"include_tools":"true"}),
+            json!({"session_id":1,"max_chars":-1}),
+        ] {
+            let line = json!({"jsonrpc":"2.0", "id":32, "method":"tools/call",
+                "params":{"name":"read_session_history", "arguments":args}})
+            .to_string();
+            let error = unwrap_respond(dispatch_with_features(SESSIONS_ONLY, &line).await)
+                .error
+                .unwrap();
+            assert_eq!(error.code, -32602);
+        }
     }
 
     #[tokio::test]
@@ -5847,6 +6342,7 @@ mod tests {
         result: false,
         automations: true,
         taskboard: false,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5863,6 +6359,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: true,
+        personal_agent: false,
         browser: false,
         browser_eval: false,
         computer: false,
@@ -5885,6 +6382,154 @@ mod tests {
 
         let names = list_tool_names(dispatch_with_features(TASKBOARD_ONLY, list).await);
         assert_eq!(names, vec!["create_work_task".to_string()]);
+    }
+
+    // -- personal agent: one group, only for its own connection -----------
+
+    const PERSONAL_AGENT_ONLY: CompanionFeatures = CompanionFeatures {
+        delegation: false,
+        feedback: false,
+        ask: false,
+        sessions: false,
+        tasks: false,
+        result: false,
+        automations: false,
+        taskboard: false,
+        personal_agent: true,
+        browser: false,
+        browser_eval: false,
+        computer: false,
+        computer_launch: false,
+        computer_clipboard: false,
+    };
+
+    const PERSONAL_AGENT_TOOLS: [&str; 33] = [
+        "project_list",
+        "dispatch",
+        "dispatch_followup",
+        "dispatch_answer",
+        "item_list",
+        "item_read",
+        "item_update",
+        "timeline_read",
+        "bot_list",
+        "bot_message",
+        "prefs_update",
+        "bot_create",
+        "overview",
+        "board_status",
+        "session_list",
+        "automation_status",
+        "pr_status",
+        "usage_summary",
+        "activity_summary",
+        "acceptance_decide",
+        "forge_comment",
+        "issue_close",
+        "pr_merge",
+        "bot_update",
+        "routine_list",
+        "routine_create",
+        "routine_update",
+        "wrap_up",
+        "history_search",
+        "pr_feedback_forward",
+        "plan_create",
+        "plan_update",
+        "plan_read",
+    ];
+
+    #[tokio::test]
+    async fn a_personal_assistants_ask_names_the_input_it_is_for() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let ask_for = |action: LineAction| {
+            unwrap_respond(action).result.unwrap()["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == "ask_user_question")
+                .and_then(|t| t.pointer("/inputSchema/properties/for").cloned())
+        };
+        // Any other agent's ask takes no `for`: it has no inputs to name.
+        let plain = CompanionFeatures {
+            ask: true,
+            personal_agent: false,
+            ..PERSONAL_AGENT_ONLY
+        };
+        assert!(ask_for(dispatch_with_features(plain, list).await).is_none());
+        let assistant = CompanionFeatures {
+            ask: true,
+            ..PERSONAL_AGENT_ONLY
+        };
+        assert!(ask_for(dispatch_with_features(assistant, list).await).is_some());
+    }
+
+    #[test]
+    fn the_personal_agent_token_parses_on_its_own() {
+        let f = CompanionFeatures::parse(Some("personal_agent"));
+        assert!(f.personal_agent);
+        assert!(!f.delegation && !f.taskboard && !f.automations);
+        assert!(!CompanionFeatures::parse(None).personal_agent);
+    }
+
+    #[tokio::test]
+    async fn tools_list_offers_the_personal_agent_group_only_when_on() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let names = list_tool_names(dispatch_for_test(list).await);
+        for tool in PERSONAL_AGENT_TOOLS {
+            assert!(!names.contains(&tool.to_string()), "{tool} leaked");
+        }
+        let mut names = list_tool_names(dispatch_with_features(PERSONAL_AGENT_ONLY, list).await);
+        names.sort();
+        let mut want: Vec<String> = PERSONAL_AGENT_TOOLS.iter().map(|t| t.to_string()).collect();
+        want.sort();
+        assert_eq!(names, want);
+    }
+
+    #[tokio::test]
+    async fn personal_agent_tools_are_unknown_when_the_group_is_off() {
+        for tool in PERSONAL_AGENT_TOOLS {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 61, "method": "tools/call",
+                "params": { "name": tool, "arguments": {} }
+            })
+            .to_string();
+            let resp = unwrap_respond(dispatch_with_features(TASKBOARD_ONLY, &line).await);
+            let e = resp.error.expect("must be rejected");
+            assert_eq!(e.code, -32602);
+            assert!(e.message.contains("unknown tool"), "{tool}: {}", e.message);
+        }
+    }
+
+    #[tokio::test]
+    async fn personal_agent_tools_forward_objects_and_refuse_other_shapes() {
+        let ok = json!({
+            "jsonrpc": "2.0", "id": 62, "method": "tools/call",
+            "params": { "name": "dispatch", "arguments": { "mode": "chat" } }
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_with_features(PERSONAL_AGENT_ONLY, &ok).await,
+            LineAction::Spawn(_)
+        ));
+        let bad = json!({
+            "jsonrpc": "2.0", "id": 63, "method": "tools/call",
+            "params": { "name": "item_read", "arguments": [1] }
+        })
+        .to_string();
+        let resp = unwrap_respond(dispatch_with_features(PERSONAL_AGENT_ONLY, &bad).await);
+        assert_eq!(resp.error.expect("refused").code, -32602);
+    }
+
+    #[test]
+    fn a_personal_agent_outcome_renders_text_and_structure() {
+        let out = render_personal_agent_result(&json!({
+            "ok": false,
+            "text": "a chat dispatch takes no project_id",
+        }));
+        assert_eq!(out["isError"], false);
+        assert_eq!(out["content"][0]["text"], "a chat dispatch takes no project_id");
+        assert_eq!(out["structuredContent"]["ok"], false);
     }
 
     /// Calling a tool whose group is off is rejected as an unknown tool — same
@@ -6744,6 +7389,7 @@ mod tests {
         result: false,
         automations: false,
         taskboard: false,
+        personal_agent: false,
         browser: true,
         browser_eval: false,
         computer: false,
@@ -8463,13 +9109,15 @@ mod tests {
             _ => None,
         });
         let ctx = ctx_on(&sock);
-        // Unknown still offers the parameter (calls re-check), without a roster.
+        // Unknown still offers the parameters (calls re-check), without a
+        // roster: `bot`, and `assistant_id` for an old link.
         let delegate = delegate_schema(&ctx).await;
         let id_description = delegate["inputSchema"]["properties"]["assistant_id"]["description"]
             .as_str()
             .unwrap()
             .to_string();
-        assert_eq!(id_description, ASSISTANT_ID_DESCRIPTION);
+        assert_eq!(id_description, LEGACY_ASSISTANT_ID_DESCRIPTION);
+        assert!(delegate["inputSchema"]["properties"]["bot"].is_object());
         assert_eq!(
             ctx.assistant_support.resolve(&sock).await,
             AssistantSupport::Supported,

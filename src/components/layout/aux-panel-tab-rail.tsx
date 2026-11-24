@@ -45,6 +45,18 @@ export const TRIGGER_CLASS = cn(
   "[&_svg]:pointer-events-none [&_svg]:shrink-0"
 )
 
+/** The rail itself, down the panel's end edge. No background of its own, so
+ *  it shows the same surface as the panel body beside it: the column's
+ *  `bg-background`, or the workspace background image when one is on. The
+ *  start border is what separates the two; `ws-chrome-border` boosts it over
+ *  a background image, where the theme hairline washes out.
+ *  `w-12` centres the icons 1.5rem in from the window edge: right under the
+ *  settings button of the corner overlay above (`pr-3` + half an `h-6 w-6`
+ *  button, both rem, so they stay lined up at any zoom), and within a pixel
+ *  of the Windows/Linux close button's centre. */
+const AUX_RAIL_CLASS =
+  "flex w-12 shrink-0 flex-col items-center border-s border-border py-1.5 ws-chrome-border"
+
 /** Alt+↑/↓ moves the focused tab — the keyboard way to do what a drag does.
  *  Radix's roving focus ignores modified arrows, so the two never collide. */
 const MOVE_KEYS = "Alt+ArrowUp Alt+ArrowDown"
@@ -148,19 +160,7 @@ export function AuxPanelTabRail({
   return (
     <TabsPrimitive.List
       data-aux-tab-rail
-      className={cn(
-        // No background of its own, so the rail shows the same surface as the
-        // panel body beside it: the column's `bg-background`, or the workspace
-        // background image when one is on. The start border is what separates
-        // the two; `ws-chrome-border` boosts it over a background image, where
-        // the theme hairline washes out.
-        // `w-12` centres the icons 1.5rem in from the window edge: right under
-        // the settings button of the corner overlay above (`pr-3` + half an
-        // `h-6 w-6` button, both rem, so they stay lined up at any zoom), and
-        // within a pixel of the Windows/Linux close button's centre.
-        "flex w-12 shrink-0 flex-col items-center border-s border-border py-1.5 ws-chrome-border",
-        !visible && "hidden"
-      )}
+      className={cn(AUX_RAIL_CLASS, !visible && "hidden")}
     >
       {visible ? (
         <Reorder.Group

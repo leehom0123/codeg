@@ -648,6 +648,7 @@ async fn import_one(
         origin_cwd: Set(None),
         assistant_id: Set(None),
         assistant_snapshot: Set(None),
+        bot_uid: Set(None),
         source: Set(None),
         btw_promoted: Set(false),
         selector_state: Set(None),
@@ -1130,6 +1131,7 @@ mod tests {
             origin_cwd: Set(None),
             assistant_id: Set(None),
             assistant_snapshot: Set(None),
+            bot_uid: Set(None),
             source: Set(None),
             btw_promoted: Set(false),
             selector_state: Set(None),
@@ -1255,7 +1257,20 @@ mod tests {
         .await
         .expect("import");
         let id = find_id(&db.conn, "ext-1").await;
-        conversation_service::update_title(&db.conn, id, "User Pick".into())
+        use crate::acp::session_info::{
+            SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig,
+        };
+        let config = SessionInfoRuntimeConfig::new();
+        config.set(SessionInfoConfig { enabled: true }).await;
+        let sessions = crate::commands::session_info::DbSessionInfoLookup::new(
+            std::sync::Arc::new(crate::db::AppDatabase {
+                conn: db.conn.clone(),
+            }),
+            crate::web::event_bridge::EventEmitter::Noop,
+            config,
+        );
+        sessions
+            .rename(id, id, "User Pick".into())
             .await
             .expect("rename");
         conversation_service::update_pin(&db.conn, id, true)
@@ -1429,6 +1444,7 @@ mod tests {
             origin_cwd: Set(None),
             assistant_id: Set(None),
             assistant_snapshot: Set(None),
+            bot_uid: Set(None),
             source: Set(None),
             btw_promoted: Set(false),
             selector_state: Set(None),

@@ -6,7 +6,7 @@ use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
-use super::connection::{current_config_option_values, SteerOutcome};
+use super::connection::SteerOutcome;
 use super::delegation::broker::DelegationBroker;
 use super::error::AcpError;
 use super::manager::ConnectionManager;
@@ -187,14 +187,10 @@ impl SessionCreator {
                         "could not apply permission mode {mode:?} for {agent_type}"
                     ));
                 }
-                let current = current_config_option_values(&snapshot.config_options);
-                if let Some((key, value)) = request
-                    .config_values
-                    .iter()
-                    .find(|(key, value)| current.get(*key) != Some(*value))
-                {
-                    return Err(format!("could not apply {key}={value} for {agent_type}"));
-                }
+                super::delegation::models::validate_config_values(
+                    &snapshot.config_options,
+                    &request.config_values,
+                )?;
                 Ok(())
             }
             .await;

@@ -103,6 +103,7 @@ export function SessionDetailsTab() {
                 )}
               <SessionDetailsInsights
                 conversationId={activeRuntimeId}
+                dbConversationId={activeConversationTab?.conversationId ?? null}
                 active={active}
               />
             </div>

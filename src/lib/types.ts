@@ -1097,10 +1097,15 @@ export type ConversationStatus =
 /** Mirrors Rust `ConversationKind` (src-tauri/src/db/entities/conversation.rs).
  *  `loop` rows belong to the Loop Engineering workbench and never appear in
  *  the sidebar list; `delegate` rows nest under their parent's tool-call view;
- *  `btw` rows are `/btw` side questions — they name a parent but render in the
- *  folder's collapsible "btw" section instead of under the parent's chevron
- *  (see docs/btw-side-question-design.md). */
-export type ConversationKind = "regular" | "chat" | "loop" | "delegate" | "btw"
+ *  Ask rows nest under their parent and appear in Session Details.
+ *  Btw rows appear in the separate btw section. */
+export type ConversationKind =
+  | "regular"
+  | "chat"
+  | "loop"
+  | "delegate"
+  | "ask"
+  | "btw"
 
 /** Mirrors Rust `FolderKind` (src-tauri/src/db/entities/folder.rs).
  *  `loop_worktree` is reserved for M2+ — add it here when the variant lands. */

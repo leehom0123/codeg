@@ -453,8 +453,10 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
     },
 
     // Insert-or-replace a conversation by id (create + field updates). Root-only:
-    // delegation children (parent_id set) are not sidebar rows. New rows prepend
-    // (most-recent-first); existing rows replace in place to keep their position.
+    // children (parent_id set) — delegation sub-sessions and ask conversations
+    // — are not root rows; `useSubsessionSync` nests them under their parent.
+    // New rows prepend (most-recent-first); existing rows replace in place to
+    // keep their position.
     applyConversationUpsert: (summary) => {
       // Delegation children are not sidebar rows — but btw forks are, despite
       // naming a parent (the sidebar's btw section; see

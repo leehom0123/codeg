@@ -33,11 +33,17 @@ vi.mock("@/lib/utils", async (importOriginal) => ({
 
 // The insights sections have their own tests; here, only what they're handed.
 const insightsProps = vi.hoisted(
-  () => [] as Array<{ conversationId: number | null; active: boolean }>
+  () =>
+    [] as Array<{
+      conversationId: number | null
+      dbConversationId?: number | null
+      active: boolean
+    }>
 )
 vi.mock("./session-details-insights", () => ({
   SessionDetailsInsights: (props: {
     conversationId: number | null
+    dbConversationId: number | null
     active: boolean
   }) => {
     insightsProps.push(props)
@@ -316,7 +322,11 @@ describe("SessionDetailsTab", () => {
     setupScene({ hasActiveConversation: true })
     const { getByTestId } = renderTab()
     expect(getByTestId("session-insights")).toBeTruthy()
-    expect(lastInsightsProps()).toEqual({ conversationId: 7, active: true })
+    expect(lastInsightsProps()).toEqual({
+      conversationId: 7,
+      dbConversationId: 7,
+      active: true,
+    })
   })
 
   // A conversation started in this tab streams — and publishes — under its
@@ -325,6 +335,9 @@ describe("SessionDetailsTab", () => {
     setupScene({ hasActiveConversation: true, runtimeConversationId: -42 })
     renderTab()
     expect(lastInsightsProps()?.conversationId).toBe(-42)
+    // Its ask conversations are linked to the persisted row, never the
+    // virtual id.
+    expect(lastInsightsProps()?.dbConversationId).toBe(7)
   })
 
   it("tells the insights when another tab is showing", () => {

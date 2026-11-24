@@ -1,10 +1,18 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
     QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 
 use crate::db::entities::{conversation, session_message};
+
+/// SQLite starts deferred transactions. Take the writer lock before reading
+/// so concurrent session traffic cannot invalidate the snapshot before INSERT.
+pub(crate) async fn begin_write(db: &DatabaseConnection) -> Result<DatabaseTransaction, DbErr> {
+    let txn = db.begin().await?;
+    txn.execute_unprepared("UPDATE session_message SET id = id WHERE 0").await?;
+    Ok(txn)
+}
 
 /// Queue a message only while both conversations still exist and are visible.
 pub async fn enqueue(
@@ -18,7 +26,7 @@ pub async fn enqueue(
     if message.trim().is_empty() || !matches!(mode.as_str(), "queue" | "steer") {
         return Err(DbErr::Custom("invalid session message".into()));
     }
-    let txn = db.begin().await?;
+    let txn = begin_write(db).await?;
     ensure_live(&txn, sender).await?;
     ensure_live(&txn, recipient).await?;
     let active = super::turn_delivery_service::active(&txn, sender).await?;

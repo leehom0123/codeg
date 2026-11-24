@@ -105,6 +105,10 @@ pub struct SessionInfo {
     pub children: Vec<SessionChild>,
     #[serde(default)]
     pub children_truncated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collaborators: Vec<SessionChild>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collaborators_truncated: bool,
     /// Human-readable note for a not-found result, or a partial one (e.g. the
     /// transcript parse timed out so `messages` is absent). `None` on a clean
     /// full result.

@@ -165,6 +165,8 @@ impl SessionInfoAccess for DbSessionInfoLookup {
             messages: None,
             children: Vec::new(),
             children_truncated: false,
+            collaborators: Vec::new(),
+            collaborators_truncated: false,
             note: None,
         };
 
@@ -182,6 +184,18 @@ impl SessionInfoAccess for DbSessionInfoLookup {
                     .collect();
             }
             Err(_) => info.note = Some("Delegation children could not be read.".into()),
+        }
+
+        match conversation_service::list_collaborators(conn, session_id, false).await {
+            Ok(rows) => {
+                info.collaborators_truncated = rows.len() > MAX_SESSION_MESSAGES as usize;
+                info.collaborators = rows.into_iter().take(MAX_SESSION_MESSAGES as usize)
+                    .map(|row| SessionChild { session_id: row.id, task_id: None, status: row.status })
+                    .collect();
+            }
+            Err(_) => {
+                info.note.get_or_insert_with(|| "Independent collaborators could not be read.".into());
+            }
         }
 
         if max_messages == 0 {

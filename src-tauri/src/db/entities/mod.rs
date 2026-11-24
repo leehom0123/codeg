@@ -49,6 +49,7 @@ pub mod personal_agent_signal;
 pub mod prelude;
 pub mod quick_message;
 pub mod session_message;
+pub mod conversation_context;
 pub mod remote_workspace_connection;
 pub mod srn_web_login;
 pub mod srn_web_session;
@@ -60,3 +61,6 @@ pub mod work_task_event;
 pub mod work_task_settings;
 pub mod work_task_source_key;
 pub mod work_task_template;
+
+pub mod conversation_turn;
+pub mod delegation_delivery;

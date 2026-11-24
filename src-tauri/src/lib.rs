@@ -1951,6 +1951,8 @@ mod tauri_app {
                 conversations::create_chat_dir,
                 conversations::update_conversation_status,
                 conversations::update_conversation_title,
+                crate::commands::session_digest::session_digest_action,
+                crate::commands::session_digest::session_brief_read,
                 conversations::update_conversation_pinned,
                 assistant_commands::assistant_list,
                 crate::commands::personal_agent::personal_agent_get,

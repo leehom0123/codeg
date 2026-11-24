@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "تقدم الجلسة",
+    "title": "جلسات التعاون",
+    "brief": "ملاحظات التسليم",
+    "link": "ربط",
+    "choose": "اختر جلسة",
+    "unlink": "إلغاء الربط",
+    "empty": "لا توجد جلسات تعاون",
+    "error": "تعذر تحديث جلسات التعاون."
+  },
   "HtmlCodePreview": {
     "code": "الكود",
     "preview": "معاينة",
@@ -13188,5 +13198,20 @@
     "btw": {
       "unsupportedAgent": "هذا الوكيل لا يدعم الأسئلة الجانبية (يتطلب تفريع الجلسة واستئنافها)."
     }
+  },
+  "SessionDigest": {
+    "title": "ملخص الجلسة",
+    "now": "قيد التنفيذ",
+    "news": "المستجدات",
+    "needsYou": "بانتظار إجابتك",
+    "suggestions": "اقتراحات",
+    "recommended": "موصى به",
+    "dismiss": "رفض {title}",
+    "updatedAt": "آخر تحديث {time}",
+    "pendingCount": "{count} بانتظار الإجابة",
+    "inProgress": "قيد التنفيذ",
+    "answerWhenReady": "يمكنك الإجابة عندما تكون الجلسة متصلة وتكون قائمة الرسائل فارغة.",
+    "sendFailed": "تعذر إرسال الإجابة. حاول مرة أخرى.",
+    "actionFailed": "تعذر حفظ هذا الإجراء."
   }
 }

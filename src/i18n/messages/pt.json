@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "Progresso da sessão",
+    "title": "Sessões de colaboração",
+    "brief": "Notas de transferência",
+    "link": "Vincular",
+    "choose": "Escolher sessão",
+    "unlink": "Desvincular",
+    "empty": "Nenhuma sessão de colaboração",
+    "error": "Não foi possível atualizar as sessões de colaboração."
+  },
   "HtmlCodePreview": {
     "code": "Código",
     "preview": "Prévia",
@@ -13188,5 +13198,20 @@
     "btw": {
       "unsupportedAgent": "Este agente não suporta perguntas paralelas (é preciso bifurcação e retomada de sessão)."
     }
+  },
+  "SessionDigest": {
+    "title": "Resumo da sessão",
+    "now": "Em andamento",
+    "news": "Novidades",
+    "needsYou": "Aguardando sua resposta",
+    "suggestions": "Sugestões",
+    "recommended": "Recomendado",
+    "dismiss": "Recusar {title}",
+    "updatedAt": "Atualizado {time}",
+    "pendingCount": "{count} respostas pendentes",
+    "inProgress": "Em andamento",
+    "answerWhenReady": "Você pode responder quando a sessão estiver conectada e a fila de mensagens estiver vazia.",
+    "sendFailed": "Não foi possível enviar a resposta. Tente novamente.",
+    "actionFailed": "Não foi possível salvar esta ação."
   }
 }

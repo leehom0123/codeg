@@ -495,6 +495,12 @@ impl DelegationListener {
             BrokerMessage::SessionMessage(req) => BrokerResponse {
                 outcome: self.process_session_message(req).await,
             },
+            BrokerMessage::SessionDigest { token, args } => BrokerResponse {
+                outcome: self.process_session_digest(&token, args).await,
+            },
+            BrokerMessage::SessionBrief { token, args } => BrokerResponse {
+                outcome: self.process_session_brief(&token, args).await,
+            },
             BrokerMessage::GetCurrentSession { token } => BrokerResponse {
                 outcome: self.process_session_discovery(&token, None).await,
             },
@@ -988,7 +994,119 @@ impl DelegationListener {
         match crate::db::service::session_message_service::enqueue(
             db, sender, req.conversation_id, req.message, req.mode, req.reply,
         ).await {
-            Ok(message_id) => serde_json::json!({"message_id": message_id}),
+            Ok(message_id) => {
+                use crate::db::entities::session_message;
+                use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+                match session_message::Entity::find()
+                    .filter(session_message::Column::MessageId.eq(message_id.clone()))
+                    .one(db)
+                    .await
+                {
+                    Ok(Some(row)) => {
+                        serde_json::json!({"message_id": message_id, "status": row.status, "error": row.error})
+                    }
+                    _ => serde_json::json!({"message_id": message_id}),
+                }
+            }
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    async fn process_session_digest(
+        &self,
+        token: &str,
+        args: crate::db::service::session_digest_service::DigestInput,
+    ) -> Value {
+        let Some(entry) = self.tokens.lookup(token).await else {
+            return serde_json::json!({"error": "Session digest is unavailable"});
+        };
+        if entry.agent_hosts_tools
+            || !self
+                .broker
+                .config_snapshot()
+                .await
+                .session_messaging_enabled
+        {
+            return serde_json::json!({"error": "Session messaging is disabled"});
+        }
+        let Some(id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return serde_json::json!({"error": "Caller has no active conversation"});
+        };
+        let Some(db) = self.session_message_db.get() else {
+            return serde_json::json!({"error": "Session digest is unavailable"});
+        };
+        match crate::db::service::session_digest_service::update(db, id, args).await {
+            Ok(digest) => {
+                if let Some(creator) = self.session_creator.get() {
+                    if let Some((_, emitter)) = creator
+                        .manager
+                        .get_state_and_emitter(&entry.parent_connection_id)
+                        .await
+                    {
+                        crate::db::service::session_digest_service::broadcast(db, &emitter, id)
+                            .await;
+                    }
+                }
+                serde_json::json!({"digest": digest, "dismissedSuggestions": digest.dismissed_suggestions})
+            }
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    async fn process_session_brief(
+        &self,
+        token: &str,
+        args: crate::db::service::conversation_context_service::BriefOperation,
+    ) -> Value {
+        let Some(entry) = self.tokens.lookup(token).await else {
+            return serde_json::json!({"error": "Session brief is unavailable"});
+        };
+        if entry.agent_hosts_tools
+            || !self
+                .broker
+                .config_snapshot()
+                .await
+                .session_messaging_enabled
+        {
+            return serde_json::json!({"error": "Session messaging is disabled"});
+        }
+        let Some(id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return serde_json::json!({"error": "Caller has no active conversation"});
+        };
+        let Some(db) = self.session_message_db.get() else {
+            return serde_json::json!({"error": "Session brief is unavailable"});
+        };
+        let changed = !matches!(
+            &args,
+            crate::db::service::conversation_context_service::BriefOperation::Read
+        );
+        match crate::db::service::conversation_context_service::update_brief(db, id, args).await {
+            Ok(brief) => {
+                if changed {
+                    if let Some(creator) = self.session_creator.get() {
+                        if let Some((_, emitter)) = creator
+                            .manager
+                            .get_state_and_emitter(&entry.parent_connection_id)
+                            .await
+                        {
+                            crate::web::event_bridge::emit_event(
+                                &emitter,
+                                "session-brief://changed",
+                                serde_json::json!({"conversationId": id}),
+                            );
+                        }
+                    }
+                }
+                serde_json::json!({"brief": brief})
+            }
             Err(error) => serde_json::json!({"error": error.to_string()}),
         }
     }
@@ -1026,7 +1144,12 @@ impl DelegationListener {
                 Ok(folder) => folder.map(|folder| folder.path),
                 Err(error) => return json!({"error": error.to_string()}),
             };
+            let brief = match crate::db::service::conversation_context_service::read_brief(db, conversation_id).await {
+                Ok(brief) => brief,
+                Err(error) => return json!({"error": error.to_string()}),
+            };
             return json!({
+                "brief": brief,
                 "conversation_id": conversation_id,
                 "folder_id": caller.folder_id,
                 "folder_path": folder_path,
@@ -1635,6 +1758,26 @@ impl DelegationListener {
             .clone()
             .or_else(|| Some(entry.working_dir.to_string_lossy().to_string()));
 
+        let notify_mode = match req.input.get("notify_mode") {
+            None | Some(Value::Null) => "poll".to_owned(),
+            Some(Value::String(value)) if matches!(value.as_str(), "poll" | "deliver") => {
+                value.clone()
+            }
+            _ => {
+                return report_failed("invalid_notify_mode", "notify_mode must be poll or deliver")
+            }
+        };
+        let follow = match req.input.get("follow") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return report_failed("invalid_follow", "follow must be a boolean"),
+        };
+        if (notify_mode == "deliver" || follow) && entry.agent_hosts_tools {
+            return report_failed(
+                "delivery_unavailable",
+                "automatic delivery is unavailable for this agent",
+            );
+        }
         let delegation_req = DelegationRequest {
             parent_connection_id: req.parent_connection_id,
             parent_conversation_id,
@@ -1647,7 +1790,9 @@ impl DelegationListener {
             assistant,
             asked: Some(asked),
         };
-        self.broker.start_delegation(delegation_req).await
+        self.broker
+            .start_delegation_with_delivery(delegation_req, notify_mode, follow)
+            .await
     }
 
     async fn assistant_not_found(&self, asked: &str) -> DelegationTaskReport {

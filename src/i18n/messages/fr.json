@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "Progression de la session",
+    "title": "Sessions de collaboration",
+    "brief": "Notes de passation",
+    "link": "Associer",
+    "choose": "Choisir une session",
+    "unlink": "Dissocier",
+    "empty": "Aucune session de collaboration",
+    "error": "Impossible de mettre à jour les sessions de collaboration."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Aperçu",
@@ -13188,5 +13198,20 @@
     "btw": {
       "unsupportedAgent": "Cet agent ne prend pas en charge les questions annexes (fourche de session et reprise requises)."
     }
+  },
+  "SessionDigest": {
+    "title": "Résumé de la session",
+    "now": "En cours",
+    "news": "Nouveautés",
+    "needsYou": "Votre réponse est attendue",
+    "suggestions": "Suggestions",
+    "recommended": "Recommandé",
+    "dismiss": "Refuser {title}",
+    "updatedAt": "Mis à jour {time}",
+    "pendingCount": "{count} réponses attendues",
+    "inProgress": "En cours",
+    "answerWhenReady": "Vous pouvez répondre lorsque la session est connectée et la file de messages est vide.",
+    "sendFailed": "Impossible d’envoyer la réponse. Réessayez.",
+    "actionFailed": "Impossible d’enregistrer cette action."
   }
 }

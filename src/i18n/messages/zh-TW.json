@@ -1,4 +1,14 @@
 {
+  "SessionCollaboration": {
+    "progress": "工作階段進度",
+    "title": "協作工作階段",
+    "brief": "接手筆記",
+    "link": "關聯",
+    "choose": "選擇工作階段",
+    "unlink": "解除關聯",
+    "empty": "沒有協作工作階段",
+    "error": "無法更新協作工作階段。"
+  },
   "HtmlCodePreview": {
     "code": "程式碼",
     "preview": "預覽",
@@ -13188,5 +13198,20 @@
     "btw": {
       "unsupportedAgent": "該智能體不支持側問（需要會話分叉與還原能力）。"
     }
+  },
+  "SessionDigest": {
+    "title": "工作階段摘要",
+    "now": "正在進行",
+    "news": "最新進展",
+    "needsYou": "待你回答",
+    "suggestions": "建議",
+    "recommended": "推薦",
+    "dismiss": "回絕 {title}",
+    "updatedAt": "更新於 {time}",
+    "pendingCount": "{count} 項待答",
+    "inProgress": "進行中",
+    "answerWhenReady": "工作階段連線後，等待目前回合和訊息佇列處理完即可回答。",
+    "sendFailed": "回答未傳送，請重試。",
+    "actionFailed": "操作未儲存，請重試。"
   }
 }

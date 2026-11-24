@@ -877,7 +877,11 @@ pub struct SessionState {
     pub turns_completed: u64,
     pub(crate) last_turn_complete_seq: u64,
     pub(crate) settled_turn_seq: u64,
-    pub(crate) message_turns: Vec<super::session_messages::TurnWaiter>,
+    pub(crate) active_turn_id: Option<String>,
+    pub(crate) pending_turn_id: Option<String>,
+    pub(crate) turn_database: Option<sea_orm::DatabaseConnection>,
+    pub(crate) completed_turns: BTreeMap<u64, (String, Option<String>)>,
+    pub(crate) pending_delivery: Option<crate::db::service::turn_delivery_service::DeliveryPolicy>,
 
     /// Auto-preview work scheduled by `apply_event` for the files the running
     /// turn's tool calls name (see `crate::agent_turn_files`). `apply_event`
@@ -1103,7 +1107,11 @@ impl SessionState {
             turns_completed: 0,
             last_turn_complete_seq: 0,
             settled_turn_seq: 0,
-            message_turns: Vec::new(),
+            active_turn_id: None,
+            pending_turn_id: None,
+            turn_database: None,
+            completed_turns: BTreeMap::new(),
+            pending_delivery: None,
             turn_file_jobs: Vec::new(),
             last_turn_ended_abnormally: false,
             config_stale: false,
@@ -1185,37 +1193,15 @@ impl SessionState {
             ),
             _ => None,
         };
-        if let AcpEvent::UserMessage { message_id, .. } = payload {
-            for waiter in &mut self.message_turns {
-                if waiter.prompt_id.as_deref() == Some(message_id) {
-                    waiter.turn = Some(self.turns_completed);
-                }
-            }
-        }
-        let completed_turn = self.turns_completed;
         self.apply_event_inner(payload);
-        match payload {
-            AcpEvent::TurnComplete { stop_reason, .. } => {
+        if matches!(payload, AcpEvent::TurnComplete { .. }) {
                 self.last_turn_complete_seq = self.event_seq + 1;
-                self.message_turns.retain_mut(|waiter| {
-                    if waiter.turn == Some(completed_turn) {
-                        if let Some(reply) = waiter.reply.take() {
-                            let _ = reply.send(if stop_reason == "end_turn" {
-                                Ok(self.last_assistant_text.clone())
-                            } else {
-                                Err(format!("recipient turn ended: {stop_reason}"))
-                            });
-                        }
-                        false
-                    } else {
-                        waiter.reply.as_ref().is_some_and(|tx| !tx.is_closed())
-                    }
-                });
-            }
-            AcpEvent::StatusChanged {
-                status: ConnectionStatus::Disconnected | ConnectionStatus::Error,
-            } => self.message_turns.clear(),
-            _ => {},
+                if let Some(turn_id) = self.active_turn_id.take() {
+                    self.completed_turns.insert(
+                        self.event_seq + 1,
+                        (turn_id, self.last_assistant_text.clone()),
+                    );
+                }
         }
         self.track_turn_files(payload, was_prompting, tool_call_before);
     }
@@ -3302,6 +3288,23 @@ mod tests {
             "win-test".to_string(),
             None,
         )
+    }
+
+    #[test]
+    fn completed_delivery_text_is_frozen_before_next_turn() {
+        let mut state = fresh_state();
+        state.active_turn_id = Some("stable-first".into());
+        state.last_assistant_text = Some("first answer".into());
+        state.apply_event(&AcpEvent::TurnComplete {
+            session_id: "session".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        state.active_turn_id = Some("stable-second".into());
+        state.last_assistant_text = Some("second answer".into());
+        let frozen = state.completed_turns.get(&1).unwrap();
+        assert_eq!(frozen.0, "stable-first");
+        assert_eq!(frozen.1.as_deref(), Some("first answer"));
     }
 
     /// `ConversationLinked` must forget the live-title skip-cache.

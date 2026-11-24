@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, TransactionTrait};
-use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
 use super::connection::SteerOutcome;
@@ -22,13 +21,10 @@ use crate::web::event_bridge::EventEmitter;
 
 pub(crate) const PROMPT_ID_PREFIX: &str = "session-message-";
 type TurnResult = Result<Option<String>, String>;
-pub(crate) type TurnSender = oneshot::Sender<TurnResult>;
-
 #[derive(Debug)]
-pub(crate) struct TurnWaiter {
-    pub prompt_id: Option<String>,
-    pub turn: Option<u64>,
-    pub reply: Option<TurnSender>,
+pub struct SessionMessageDelivery {
+    pub db: DatabaseConnection,
+    pub message_id: i32,
 }
 
 pub struct SessionCreator {
@@ -378,7 +374,19 @@ pub async fn start(
     data_dir: std::path::PathBuf,
     emitter: EventEmitter,
 ) {
-    while let Err(error) = queue::interrupt_in_flight(&db).await {
+    let startup = chrono::Utc::now();
+    let recovery = loop {
+        match crate::db::service::turn_delivery_service::capture_recovery(&db, startup).await {
+            Ok(snapshot) => break snapshot,
+            Err(error) => {
+                tracing::warn!(%error, "could not capture session recovery boundary");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    };
+    while let Err(error) =
+        crate::db::service::turn_delivery_service::recover_captured(&db, recovery.clone()).await
+    {
         tracing::warn!(%error, "could not recover session messages");
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -535,46 +543,39 @@ async fn dispatch(
         "[Codeg message from conversation {}; message {}]\n\n{}",
         row.sender_conversation_id, row.message_id, row.message
     );
-    let (reply, mut result) = oneshot::channel();
     let prompt_id = format!("{PROMPT_ID_PREFIX}{}", row.message_id);
     let open_prompt = if busy {
         match manager
-            .steer_session_message(&connection, text.clone(), reply)
+            .steer_session_message(
+                &connection,
+                text.clone(),
+                SessionMessageDelivery {
+                    db: db.clone(),
+                    message_id: row.id,
+                },
+            )
             .await
         {
-            Ok(SteerOutcome::Injected) => None,
+            Ok(SteerOutcome::Injected) => false,
             Ok(SteerOutcome::StartedNewTurn) => {
-                let outcome = if row.reply_back {
-                    Err("steering started a detached turn without a tracked result".into())
-                } else {
-                    Ok(None)
-                };
-                return finish(db, &row, outcome).await;
+                return finish(
+                    db,
+                    &row,
+                    Err(
+                        "steering started an untracked detached turn; delivery is unconfirmed"
+                            .into(),
+                    ),
+                )
+                .await;
             }
             Ok(SteerOutcome::PromptRequired)
-            | Err(AcpError::FeedbackDisabled | AcpError::NoActiveTurn) => {
-                let (reply, fallback_result) = oneshot::channel();
-                result = fallback_result;
-                Some(reply)
-            }
+            | Err(AcpError::FeedbackDisabled | AcpError::NoActiveTurn) => true,
             Err(error) => return finish(db, &row, Err(error.to_string())).await,
         }
     } else {
-        Some(reply)
+        true
     };
-
-    let sent = if let Some(reply) = open_prompt {
-        {
-            let mut state = state.write().await;
-            state
-                .message_turns
-                .retain(|waiter| waiter.reply.as_ref().is_some_and(|tx| !tx.is_closed()));
-            state.message_turns.push(TurnWaiter {
-                prompt_id: Some(prompt_id.clone()),
-                turn: None,
-                reply: Some(reply),
-            });
-        }
+    let sent = if open_prompt {
         manager
             .send_prompt_linked_with_message_id(
                 &AppDatabase { conn: db.clone() },
@@ -591,17 +592,7 @@ async fn dispatch(
         Ok(())
     };
     match sent {
-        Ok(()) => {
-            let db = db.clone();
-            tokio::spawn(async move {
-                let outcome = result
-                    .await
-                    .unwrap_or_else(|_| Err("recipient disconnected before its turn ended".into()));
-                if let Err(error) = finish(&db, &row, outcome).await {
-                    tracing::error!(message_id = %row.message_id, %error, "could not settle session message");
-                }
-            });
-        }
+        Ok(()) => {}
         Err(AcpError::TurnInProgress) if busy => {
             queue::defer_as_queue(db, row.id).await?;
         }

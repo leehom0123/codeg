@@ -375,9 +375,13 @@ impl CompanionFeatures {
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
-            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" | "stop_session" => {
-                self.session_messaging
-            }
+            "send_to_session"
+            | "create_session"
+            | "get_current_session"
+            | "list_sessions"
+            | "stop_session"
+            | "session_brief"
+            | "session_digest" => self.session_messaging,
             _ => false,
         }
     }
@@ -745,6 +749,20 @@ pub async fn dispatch_line(
                 ),
                 None => all,
             };
+            if !ctx.features.session_messaging {
+                if let Some(list) = tools.as_array_mut() {
+                    for tool in list {
+                        if tool["name"] == "delegate_to_agent" {
+                            if let Some(properties) =
+                                tool["inputSchema"]["properties"].as_object_mut()
+                            {
+                                properties.remove("notify_mode");
+                                properties.remove("follow");
+                            }
+                        }
+                    }
+                }
+            }
             if ctx.features.personal_agent {
                 offer_for_on_ask(&mut tools);
             }
@@ -1074,6 +1092,16 @@ async fn build_tools_call_spawn(
             register_and_spawn(inflight, id, None, round_trip, render_agent_options_result).await
         }
         "delegate_to_agent" => {
+            if !ctx.features.session_messaging
+                && (arguments.get("notify_mode").and_then(Value::as_str) == Some("deliver")
+                    || arguments.get("follow").and_then(Value::as_bool) == Some(true))
+            {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "automatic delivery requires session messaging",
+                ));
+            }
             // MCP clients (Codex / Claude Code) generally do NOT populate
             // `_meta.tool_use_id` when calling an MCP server. We still surface it
             // when present (the most precise binding), but a missing one is
@@ -1383,6 +1411,27 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_session_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_session_result).await
+        }
+        "session_digest" => {
+            let args = match serde_json::from_value::<crate::db::service::session_digest_service::DigestInput>(arguments) {
+                Ok(args) => args,
+                Err(error) => return LineAction::Respond(err(id, -32602, format!("session_digest: {error}"))),
+            };
+            if let Err(error) = crate::db::service::session_digest_service::validate(&args) {
+                return LineAction::Respond(err(id, -32602, error.to_string()));
+            }
+            let token = ctx.token.clone();
+            let round_trip = Box::pin(async move { super::transport::client_session_digest_round_trip(&socket, token, args).await });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
+        }
+        "session_brief" => {
+            let args = match serde_json::from_value::<crate::db::service::conversation_context_service::BriefOperation>(arguments) {
+                Ok(args) => args,
+                Err(error) => return LineAction::Respond(err(id, -32602, format!("session_brief: {error}"))),
+            };
+            let token = ctx.token.clone();
+            let round_trip = Box::pin(async move { super::transport::client_session_brief_round_trip(&socket, token, args).await });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
         }
         "get_current_session" => {
             let token = ctx.token.clone();
@@ -5760,6 +5809,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_delivery_parameters_follow_session_messaging_feature() {
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let without = unwrap_respond(dispatch_for_test(line).await)
+            .result
+            .unwrap();
+        let delegate = without["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "delegate_to_agent")
+            .unwrap();
+        assert!(delegate["inputSchema"]["properties"]["notify_mode"].is_null());
+        assert!(delegate["inputSchema"]["properties"]["follow"].is_null());
+        let with = unwrap_respond(
+            dispatch_with_features(
+                CompanionFeatures {
+                    session_messaging: true,
+                    ..BOTH
+                },
+                line,
+            )
+            .await,
+        )
+        .result
+        .unwrap();
+        let delegate = with["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "delegate_to_agent")
+            .unwrap();
+        assert!(delegate["inputSchema"]["properties"]["notify_mode"].is_object());
+        assert!(delegate["inputSchema"]["properties"]["follow"].is_object());
+        let refused = unwrap_respond(dispatch_for_test(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"delegate_to_agent","arguments":{"agent_type":"codex","task":"x","notify_mode":"deliver"}}}"#).await);
+        assert_eq!(refused.error.unwrap().code, -32602);
+    }
+
+    #[tokio::test]
     async fn tools_list_hides_feedback_when_disabled() {
         // Default ctx is delegation-only: check_user_feedback must not appear.
         let names = list_tool_names(
@@ -5878,6 +5965,10 @@ mod tests {
         ).await);
         assert!(names.contains(&"create_session".into()));
         assert!(names.contains(&"send_to_session".into()));
+        assert!(names.contains(&"session_brief".into()));
+        assert!(names.contains(&"session_digest".into()));
+        assert!(!CompanionFeatures::parse(None).allows_tool("session_brief"));
+        assert!(!CompanionFeatures::parse(None).allows_tool("session_digest"));
         assert!(!names.contains(&"delegate_to_agent".into()));
 
         let invalid = json!({
@@ -9079,7 +9170,9 @@ mod tests {
             BrokerMessage::Ping => Some(json!({"ok": true})),
             _ => None,
         });
-        let delegate = delegate_schema(&ctx_on(&sock)).await;
+        let mut ctx = ctx_on(&sock);
+        ctx.features.session_messaging = true;
+        let delegate = delegate_schema(&ctx).await;
         assert_eq!(delegate, embedded_delegate_schema());
         assert_eq!(
             delegate["inputSchema"]["required"],

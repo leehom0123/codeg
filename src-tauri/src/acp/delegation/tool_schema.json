@@ -42,6 +42,20 @@
         "working_dir": {
           "type": "string",
           "description": "Absolute path the sub-agent runs in. Defaults to this session's working directory."
+        },
+        "notify_mode": {
+          "type": "string",
+          "enum": [
+            "poll",
+            "deliver"
+          ],
+          "default": "poll",
+          "description": "poll (default): collect the result with get_delegation_status. deliver: Codeg queues the first completed turn back into this conversation, waking it when offline. After starting your independent tasks, finish your current turn and wait for their messages instead of polling; status/wait still work. Requires session messaging."
+        },
+        "follow": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also deliver results of later turns in this child conversation, even after reconnects. This subscription does not keep its process running. Independent of notify_mode, which controls only the first turn. If reply_back and follow both target you for the same turn, Codeg sends one result. Requires session messaging."
         }
       }
     }
@@ -3262,6 +3276,156 @@
     "inputSchema": {
       "type": "object",
       "properties": {}
+    }
+  },
+  {
+    "name": "session_brief",
+    "description": "Read, replace or edit your persistent session brief. Keep durable goals, decisions and context within 12000 characters. Every edit oldText must match exactly once; the entire edit batch commits atomically. The brief is included in get_current_session and in the first prompt of newly delegated children.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "read",
+            "write",
+            "edit"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 12000
+        },
+        "edits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "oldText": {
+                "type": "string",
+                "minLength": 1
+              },
+              "newText": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "oldText",
+              "newText"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "session_digest",
+    "description": "Replace your current session digest in full. Keep now (up to 8), news (5), needsYou (3 questions, 4 options each), and suggestions (3) concise; each line has at most 300 characters. recommended must exactly equal an option. Use stable question IDs until the question changes. Dismissed suggestion titles are persistently filtered and returned in dismissedSuggestions; respect them instead of rephrasing the same suggestion. The user sees the digest above chat and answers through ordinary user messages.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "now": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "news": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "needsYou": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "question": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "options": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                }
+              },
+              "recommended": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "id",
+              "question",
+              "options"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "suggestions": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "detail": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "now",
+        "news",
+        "needsYou",
+        "suggestions"
+      ],
+      "additionalProperties": false
     }
   }
 ]

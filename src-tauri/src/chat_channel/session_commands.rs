@@ -888,20 +888,23 @@ pub async fn handle_resume(
 
     // Spawn agent with session_id for resume
     let owner_label = owner_label_for(channel_id, sender_id, target);
-    let connection_id = match conn_mgr
-        .spawn_agent(
-            conv.agent_type,
-            Some(folder.path.clone()),
-            conv.external_id.clone(),
-            runtime_env,
-            owner_label,
-            emitter.clone(),
-            None,
-            BTreeMap::new(),
-        )
-        .await
+    // The conversation's own stored selection is replayed (codeg#1179).
+    let connection_id = match crate::commands::acp::spawn_with_conversation_selection(
+        conn_mgr,
+        db,
+        conv.agent_type,
+        Some(folder.path.clone()),
+        conv.external_id.clone(),
+        runtime_env,
+        owner_label,
+        emitter.clone(),
+        Some(conv.id),
+        None,
+        BTreeMap::new(),
+    )
+    .await
     {
-        Ok(id) => id,
+        Ok(outcome) => outcome.connection_id,
         Err(e) => {
             return RichMessage::error(format!("{}{e}", i18n::failed_to_start_agent_label(lang)));
         }
@@ -1533,21 +1536,24 @@ async fn spawn_chat_connection_for_conversation(
             .await
             .map_err(|e| e.to_string())?;
     let owner_label = owner_label_for(channel_id, sender_id, target);
-    let connection_id = conn_mgr
-        .spawn_agent(
-            conv.agent_type,
-            Some(folder.path.clone()),
-            conv.external_id.clone(),
-            runtime_env,
-            owner_label,
-            emitter.clone(),
-            None,
-            BTreeMap::new(),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+    // The conversation's own stored selection is replayed (codeg#1179).
+    let outcome = crate::commands::acp::spawn_with_conversation_selection(
+        conn_mgr,
+        db,
+        conv.agent_type,
+        Some(folder.path.clone()),
+        conv.external_id.clone(),
+        runtime_env,
+        owner_label,
+        emitter.clone(),
+        Some(conv.id),
+        None,
+        BTreeMap::new(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
-    Ok((connection_id, folder))
+    Ok((outcome.connection_id, folder))
 }
 
 async fn send_chat_prompt(

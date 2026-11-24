@@ -74,23 +74,49 @@ pub struct AcpConnectParams {
     pub preferred_mode_id: Option<String>,
     #[serde(default)]
     pub preferred_config_values: Option<BTreeMap<String, String>>,
+    /// The conversation this connect opens, when it is an existing one: its
+    /// stored selection wins over the client's default (codeg#1179). Older
+    /// clients omit it and fall back to the session-id lookup.
+    #[serde(default)]
+    pub conversation_id: Option<i32>,
 }
 
 pub async fn acp_connect(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpConnectParams>,
 ) -> Result<Json<String>, AppCommandError> {
-    let outcome = acp_commands::acp_connect_core(
-        &state.db,
-        &state.connection_manager,
+    let db = &state.db;
+    let manager = &state.connection_manager;
+
+    let runtime_env = acp_commands::build_session_runtime_env(
+        db,
+        params.agent_type,
+        params.session_id.as_deref(),
         &state.data_dir,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+
+    // Guard: the session page must never trigger a download or install.
+    // If the agent isn't ready, return SdkNotInstalled here so the frontend
+    // can prompt the user to install it from Agent Settings.
+    acp_commands::verify_agent_installed(params.agent_type)
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+
+    let emitter = state.emitter.clone();
+    let outcome = acp_commands::spawn_with_conversation_selection(
+        manager,
+        &db.conn,
         params.agent_type,
         params.working_dir,
         params.session_id,
-        "web".into(),
-        state.emitter.clone(),
+        runtime_env,
+        "web".to_string(),
+        emitter,
+        params.conversation_id,
         params.preferred_mode_id,
-        params.preferred_config_values,
+        params.preferred_config_values.unwrap_or_default(),
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
@@ -100,20 +126,57 @@ pub async fn acp_connect(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AcpSetComposerModeParams {
+    pub connection_id: String,
+    #[serde(default)]
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub initial: Option<bool>,
+}
+
+pub async fn acp_set_composer_mode(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpSetComposerModeParams>,
+) -> Result<Json<bool>, AppCommandError> {
+    let applied = state
+        .connection_manager
+        .set_composer_mode(
+            &params.connection_id,
+            params.mode_id,
+            params.initial.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(applied))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpDisconnectParams {
     pub connection_id: String,
+    #[serde(default)]
+    pub only_if_idle: bool,
 }
 
 pub async fn acp_disconnect(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpDisconnectParams>,
-) -> Result<Json<()>, AppCommandError> {
+) -> Result<Json<Option<bool>>, AppCommandError> {
     let manager = &state.connection_manager;
-    manager
-        .disconnect(&params.connection_id)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    let result = if params.only_if_idle {
+        manager
+            .release_idle(&params.connection_id, chrono::Utc::now())
+            .await
+            .map(Some)
+    } else {
+        manager
+            .disconnect(&params.connection_id)
+            .await
+            .map(|()| None)
+    };
+    result
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -394,7 +457,7 @@ pub async fn acp_set_mode(
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.connection_manager;
     manager
-        .set_mode(&state.db.conn, &params.connection_id, params.mode_id)
+        .set_mode(&params.connection_id, params.mode_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
@@ -414,12 +477,7 @@ pub async fn acp_set_config_option(
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.connection_manager;
     manager
-        .set_config_option(
-            &state.db.conn,
-            &params.connection_id,
-            params.config_id,
-            params.value_id,
-        )
+        .set_config_option(&params.connection_id, params.config_id, params.value_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))

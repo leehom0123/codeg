@@ -23,6 +23,15 @@
     "deletePrompt": "„{title}“ löschen?",
     "storageError": "Änderungen konnten in diesem Browser nicht gespeichert werden."
   },
+  "SessionCollaboration": {
+    "progress": "Sitzungsfortschritt",
+    "title": "Zusammenarbeitssitzungen",
+    "link": "Verknüpfen",
+    "choose": "Sitzung auswählen",
+    "unlink": "Verknüpfung lösen",
+    "empty": "Keine Zusammenarbeitssitzungen",
+    "error": "Die Zusammenarbeitssitzungen konnten nicht aktualisiert werden."
+  },
   "HtmlCodePreview": {
     "code": "Code",
     "preview": "Vorschau",

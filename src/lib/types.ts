@@ -1565,7 +1565,14 @@ export type PromptInputBlock =
       description?: string | null
     }
 
+export interface CodexTurnSettings {
+  model?: string
+  reasoning_effort?: string
+  mode?: string
+}
+
 export interface PromptDraft {
+  turnSettings?: CodexTurnSettings
   blocks: PromptInputBlock[]
   displayText: string
 }

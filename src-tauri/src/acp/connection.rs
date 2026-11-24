@@ -59,13 +59,13 @@ use crate::acp::terminal_runtime::{
     TerminalRuntime, TerminalRuntimeError, TerminalShellRuntimeConfig,
 };
 use crate::acp::types::{
-    AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionStatus,
-    GrokModelCatalog, GrokModelSpec, KiroReasoning, ModelReasoningEffortsInfo,
-    PermissionAnswerOrigin, PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo,
-    PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo, SessionConfigKindInfo,
-    SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
-    SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo, SessionModeStateInfo,
-    SessionNotice, ToolApprovalInfo, ToolCallImageInfo, UserMessageBlock,
+    AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, CodexTurnSettings,
+    ConnectionStatus, GrokModelCatalog, GrokModelSpec, KiroReasoning, ModelReasoningEffortsInfo,
+    PermissionAnswerOrigin, PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure,
+    PromptCapabilitiesInfo, PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo,
+    SessionConfigKindInfo, SessionConfigOptionInfo, SessionConfigSelectGroupInfo,
+    SessionConfigSelectInfo, SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo,
+    SessionModeStateInfo, SessionNotice, ToolApprovalInfo, ToolCallImageInfo, UserMessageBlock,
 };
 use crate::logging::throttle::LeadingEdgeThrottle;
 use crate::models::agent::AgentType;
@@ -1325,6 +1325,7 @@ pub enum SteerOutcome {
 /// Commands sent from Tauri command handlers to the ACP connection loop.
 pub enum ConnectionCommand {
     Prompt {
+        settings: Option<(CodexTurnSettings, oneshot::Sender<Result<(), AcpError>>)>,
         blocks: Vec<PromptInputBlock>,
         /// Pre-projected cross-client user-message broadcast (`message_id` +
         /// user blocks), computed by the manager under the prompt lock. The
@@ -1410,6 +1411,8 @@ pub enum ConnectionCommand {
     /// protocol/persistence split. The idle arm replies `Err(NoActiveTurn)`
     /// so the oneshot can never hang.
     Steer {
+        expected_turn: Option<u64>,
+        settings: Option<CodexTurnSettings>,
         blocks: Vec<PromptInputBlock>,
         message_result: Option<super::session_messages::TurnSender>,
         reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
@@ -6056,6 +6059,80 @@ async fn set_config_option_for_agent(
         }
         _ => set_session_config_option(cx, session_id, state, emitter, config_id, value_id).await,
     }
+}
+
+/// Apply the user's picks in the same command that starts the prompt. The
+/// command loop cannot process another client's selector changes between the
+/// setters and dispatch. Model comes first because it can change offered effort.
+async fn apply_codex_turn_settings(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    settings: &CodexTurnSettings,
+) -> Result<(), AcpError> {
+    if state.read().await.agent_type != AgentType::Codex {
+        return Err(AcpError::TurnSettingRejected("agent".into()));
+    }
+    for (id, value) in settings.values() {
+        let outcome = {
+            let state = state.read().await;
+            config_option_outcome(state.config_options.as_deref().unwrap_or_default(), id)
+        };
+        if matches!(outcome, SetterOutcome::Confirmed { current } if current == value) {
+            continue;
+        }
+        let outcome = set_config_option_for_agent(
+            AgentType::Codex,
+            cx,
+            session_id,
+            state,
+            emitter,
+            id.into(),
+            value.into(),
+        )
+        .await
+        .map_err(|_| AcpError::TurnSettingRejected(id.into()))?;
+        if !matches!(outcome, SetterOutcome::Confirmed { current } if current == value) {
+            return Err(AcpError::TurnSettingRejected(id.into()));
+        }
+    }
+    let state = state.read().await;
+    let current = current_config_option_values(state.config_options.as_deref().unwrap_or_default());
+    if let Some((id, _)) = settings
+        .values()
+        .find(|(id, value)| !current.get(*id).is_some_and(|actual| actual == value))
+    {
+        return Err(AcpError::TurnSettingRejected(id.into()));
+    }
+    Ok(())
+}
+
+/// A queued message can temporarily use a pick the user has since changed.
+async fn restore_codex_turn_settings(
+    cx: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    state: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    restore: Option<CodexTurnSettings>,
+) -> bool {
+    let Some(restore) = restore else { return true };
+    if let Err(error) = apply_codex_turn_settings(cx, session_id, state, emitter, &restore).await {
+        emit_with_state(
+            state,
+            emitter,
+            AcpEvent::Error {
+                message: error.to_string(),
+                agent_type: AgentType::Codex.to_string(),
+                code: Some(SET_CONFIG_OPTION_FAILED_ERROR_CODE.into()),
+                details: None,
+                terminal: true,
+            },
+        )
+        .await;
+        return false;
+    }
+    true
 }
 
 /// Apply a composer selector change for Kiro. Each synthesized selector goes
@@ -15587,10 +15664,41 @@ async fn run_conversation_loop(
         };
         match cmd {
             Some(ConnectionCommand::Prompt {
+                settings,
                 blocks,
                 user_message,
                 internal_suffix,
             }) => {
+                let mut restore_settings = None;
+                if let Some((settings, reply)) = settings {
+                    let original = {
+                        let state = state.read().await;
+                        current_config_option_values(state.config_options.as_deref().unwrap_or_default())
+                    };
+                    if !settings.matches(&original) {
+                        restore_settings = Some(CodexTurnSettings::from_values(&original));
+                    }
+                    let result = apply_codex_turn_settings(
+                        &session.connection(),
+                        session.session_id(),
+                        state,
+                        emitter,
+                        &settings,
+                    )
+                    .await;
+                    if result.is_err() {
+                        let restored = restore_codex_turn_settings(
+                            &session.connection(), session.session_id(), state, emitter, restore_settings,
+                        ).await;
+                        state.write().await.turn_in_flight = false;
+                        let _ = reply.send(result);
+                        if !restored {
+                            break;
+                        }
+                        continue;
+                    }
+                    let _ = reply.send(result);
+                }
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
                 // consumed: the transcript record this prompt becomes must
@@ -15747,6 +15855,12 @@ async fn run_conversation_loop(
                 // its reply says whether Remote Control is on.
                 cb_state.claude_remote_control = remote_control_command(agent_type, &prompt_blocks);
                 let turn_started_at_ms = crate::acp_transcript::now_epoch_ms();
+                if agent_type == AgentType::Codex {
+                    let mut state = state.write().await;
+                    state.codex_turn_settings = current_config_option_values(
+                        state.config_options.as_deref().unwrap_or_default(),
+                    );
+                }
                 let prompt_request = PromptRequest::new(sid.clone(), prompt_blocks);
                 // Snapshot the stderr write position BEFORE the request is
                 // dispatched. An agent that fails the moment the prompt lands
@@ -16422,6 +16536,11 @@ async fn run_conversation_loop(
                                             Err(e.to_string())
                                         }
                                     };
+                                    if outcome.is_ok() {
+                                        if let Some(settings) = &mut restore_settings {
+                                            settings.mode = None;
+                                        }
+                                    }
                                     send_setter_reply(reply, outcome);
                                 }
                                 Some(ConnectionCommand::SetConfigOption {
@@ -16430,12 +16549,27 @@ async fn run_conversation_loop(
                                     reply,
                                 }) => {
                                     let set_result = set_config_option_for_agent(
-                                        agent_type, &cx, &sid, state, emitter, config_id,
+                                        agent_type, &cx, &sid, state, emitter, config_id.clone(),
                                         value_id,
                                     )
                                     .await;
                                     let outcome = match set_result {
-                                        Ok(outcome) => Ok(outcome),
+                                        Ok(outcome) => {
+                                            if matches!(outcome, SetterOutcome::Confirmed { .. }) {
+                                                if let Some(settings) = &mut restore_settings {
+                                                    match config_id.as_str() {
+                                                        "model" => {
+                                                            settings.model = None;
+                                                            settings.reasoning_effort = None;
+                                                        }
+                                                        "reasoning_effort" => settings.reasoning_effort = None,
+                                                        "mode" => settings.mode = None,
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+                                            Ok(outcome)
+                                        },
                                         Err(e) => {
                                             emit_with_state(
                                                 state,
@@ -16497,7 +16631,20 @@ async fn run_conversation_loop(
                                         let _ = reply.send(landed);
                                     }
                                 }
-                                Some(ConnectionCommand::Steer { blocks, message_result, reply }) => {
+                                Some(ConnectionCommand::Steer { blocks, expected_turn, settings, message_result, reply }) => {
+                                    {
+                                        let state = state.read().await;
+                                        if expected_turn.is_some_and(|turn| turn != state.turns_completed) {
+                                            let _ = reply.send(Err(AcpError::NoActiveTurn));
+                                            continue;
+                                        }
+                                        if settings.as_ref().is_some_and(|settings| {
+                                            !settings.matches(&state.codex_turn_settings)
+                                        }) {
+                                            let _ = reply.send(Err(AcpError::SteerSettingsChanged));
+                                            continue;
+                                        }
+                                    }
                                     // Protocol round-trip only — the manager's
                                     // cancellation-shielded task records the
                                     // note + broadcasts `FeedbackSubmitted`
@@ -16794,6 +16941,11 @@ async fn run_conversation_loop(
                     }
                 }
 
+                if !disconnect_requested
+                    && !restore_codex_turn_settings(&cx, &sid, state, emitter, restore_settings).await
+                {
+                    break;
+                }
                 if disconnect_requested {
                     tracing::info!(
                         "[ACP] closing connection loop after disconnect; connection_id={conn_id}"
@@ -38203,6 +38355,7 @@ mod tests {
             self.state.write().await.turn_in_flight = true;
             self.cmd_tx
                 .send(ConnectionCommand::Prompt {
+                    settings: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
@@ -49007,6 +49160,7 @@ mod tests {
             self.state.write().await.turn_in_flight = true;
             self.cmd_tx
                 .send(ConnectionCommand::Prompt {
+                    settings: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
@@ -50172,6 +50326,7 @@ mod tests {
             self.state.write().await.turn_in_flight = true;
             self.cmd_tx
                 .send(ConnectionCommand::Prompt {
+                    settings: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
@@ -50194,6 +50349,8 @@ mod tests {
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
                     message_result: None,
+                    expected_turn: None,
+                    settings: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     reply,
                 })
@@ -50426,6 +50583,7 @@ mod tests {
             self.state.write().await.turn_in_flight = true;
             self.cmd_tx
                 .send(ConnectionCommand::Prompt {
+                    settings: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     user_message: None,
                     internal_suffix: Vec::new(),
@@ -50808,6 +50966,7 @@ mod tests {
             self.state.write().await.turn_in_flight = true;
             self.cmd_tx
                 .send(ConnectionCommand::Prompt {
+                    settings: None,
                     blocks: vec![PromptInputBlock::Text {
                         text: "go on".into(),
                     }],
@@ -51591,6 +51750,7 @@ mod tests {
             self.state.write().await.turn_in_flight = true;
             self.cmd_tx
                 .send(ConnectionCommand::Prompt {
+                    settings: None,
                     blocks: vec![PromptInputBlock::Text {
                         text: prompt.into(),
                     }],
@@ -51625,6 +51785,8 @@ mod tests {
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
                     message_result: None,
+                    expected_turn: None,
+                    settings: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     reply,
                 })
@@ -51904,6 +52066,7 @@ mod tests {
                 lp.state.write().await.turn_in_flight = true;
                 lp.cmd_tx
                     .send(ConnectionCommand::Prompt {
+                        settings: None,
                         blocks: vec![PromptInputBlock::Text {
                             text: "write X.md".into(),
                         }],
@@ -52028,6 +52191,7 @@ mod tests {
 
     fn prompt_command(text: &str) -> ConnectionCommand {
         ConnectionCommand::Prompt {
+            settings: None,
             blocks: vec![PromptInputBlock::Text { text: text.into() }],
             user_message: None,
             internal_suffix: Vec::new(),

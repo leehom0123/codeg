@@ -90,6 +90,7 @@ import type {
   SessionUsageUpdateInfo,
   PromptCapabilitiesInfo,
   PromptInputBlock,
+  CodexTurnSettings,
   RemoteControlInfo,
   ToolApprovalInfo,
   ToolCallImageWire,
@@ -3611,6 +3612,7 @@ export interface AcpActionsValue {
       folderId?: number | null
       conversationId?: number | null
       clientMessageId?: string | null
+      turnSettings?: CodexTurnSettings
     }
   ): Promise<void>
   setMode(contextKey: string, modeId: string): Promise<void>
@@ -8447,6 +8449,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         folderId?: number | null
         conversationId?: number | null
         clientMessageId?: string | null
+        turnSettings?: CodexTurnSettings
       }
     ) => {
       // Cut-off taken synchronously: only the setters already in flight.
@@ -8465,7 +8468,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           blocks,
           opts?.folderId ?? null,
           opts?.conversationId ?? null,
-          opts?.clientMessageId ?? null
+          opts?.clientMessageId ?? null,
+          ...(opts?.turnSettings ? [opts.turnSettings] : [])
         )
       } catch (e) {
         // Same reasoning as `cancel`: the backend disowning this id proves the

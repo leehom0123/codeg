@@ -51,9 +51,9 @@ git push fork release/custom
 | feat/aux-collapsed-tab-rail | 辅助面板折叠 tab 栏 | [#1258](https://github.com/spacering-net/codeg/pull/1258) open | 已合入共享侧栏按钮更新 |
 | feat/project-knowledge | 共享项目笔记与计划 | [#1299](https://github.com/spacering-net/codeg/pull/1299) open | 已合入，知识页签共用侧栏按钮 |
 | feat/session-messaging | 会话间消息：转向、链接、读历史、运行时选项 | [#1207](https://github.com/spacering-net/codeg/pull/1207) open | 已合入最新会话通信与上游冲突修复 |
-| feat/delegation-delivery-core | 委派结果持久回投和持续上报 | [Fork #2](https://github.com/leehom0123/codeg/pull/2) 草稿 | 已随会话进度合入 |
-| feat/session-progress-stacked | 会话 Brief、Digest 和协作关系侧栏 | [Fork #3](https://github.com/leehom0123/codeg/pull/3) 草稿 | 已合入会话进度 |
-| feat/delegation-model-options | 委派时指定模型和推理档位 | 无 | 已合入，复用 list_agent_options 与 ACP 启动配置 |
+| feat/delegation-delivery-core | 委派结果持久回投和持续上报 | [#1302](https://github.com/spacering-net/codeg/pull/1302) 草稿 | 已随会话进度合入 |
+| feat/session-progress-stacked | 会话 Brief、Digest 和协作关系侧栏 | [#1303](https://github.com/spacering-net/codeg/pull/1303) 草稿 | 已合入会话进度 |
+| feat/delegation-model-options | 委派时指定模型和推理档位 | [#1304](https://github.com/spacering-net/codeg/pull/1304) 草稿 | 已合入，复用 list_agent_options 与 ACP 启动配置 |
 | fix/personal-agent-aux-path | Windows 兼容的个人助理侧栏目录 | 无 | 已随上游同步合入 |
 
 ### 未合入 release/custom
@@ -74,6 +74,7 @@ git push fork release/custom
 
 ## 维护规则
 
+- PR 一律开到上游 `spacering-net/codeg`，源分支推到 `leehom0123/codeg`。默认按上游仓库查找 PR 编号。
 - 新建开发分支：在"未合入"表中加一行，写清用途。
 - 分支合入或被放弃：移到"已合入"表（或直接删除，注明版本号），更新备注。
 - 在上游开 PR 或 PR 状态变化（合并、关闭）：更新"上游 PR"列的链接和状态。PR 被上游合并后，custom 下次合 main 即自动对齐，不需要额外动作。

@@ -513,6 +513,7 @@ pub enum BrokerMessage {
     /// empty list when the lookup fails, so a companion never mistakes a
     /// refusal for an old listener (see `Ping`).
     ListAssistants(BrokerListAssistantsRequest),
+    ListModels(BrokerListModelsRequest),
     /// Liveness and capability probe, carrying no `token`: the answer reveals
     /// nothing beyond "the socket is being served" and what this listener
     /// understands. Sent by codeg's own service-status check
@@ -528,6 +529,14 @@ pub enum BrokerMessage {
     /// dropping the assistant's options and instructions. That is why the
     /// companion asks before it forwards one (`AssistantSupport`).
     Ping,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListModelsRequest {
+    pub token: String,
+    pub agent_type: String,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// See [`BrokerMessage::ListAssistants`].
@@ -1079,6 +1088,13 @@ pub async fn client_computer_act_round_trip(
 /// it is not checked on.
 pub async fn client_ping(socket_path: &str) -> io::Result<BrokerResponse> {
     raw_round_trip(socket_path, &BrokerMessage::Ping).await
+}
+
+pub async fn client_list_models_round_trip(
+    socket_path: &str,
+    req: &BrokerListModelsRequest,
+) -> std::io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListModels(req.clone())).await
 }
 
 /// Fetch the assistant roster (see [`BrokerMessage::ListAssistants`]).

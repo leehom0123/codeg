@@ -33,7 +33,7 @@ use crate::acp::delegation::transport::{
     BrokerComputerActRequest, BrokerComputerAppsRequest, BrokerComputerCaptureRequest,
     BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest, BrokerComputerVerifyRequest,
     BrokerComputerWindowsRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
-    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerMessage, BrokerRenameSessionRequest,
+    BrokerFeedbackRequest, BrokerListAssistantsRequest, BrokerListModelsRequest, BrokerMessage, BrokerRenameSessionRequest,
     BrokerRequest, BrokerResponse, BrokerResultSchemaRequest, BrokerResumeTaskRequest,
     BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
@@ -458,6 +458,9 @@ impl DelegationListener {
                 // before it forwards an `assistant_id` call — see
                 // `BrokerMessage::Ping`.
                 outcome: serde_json::json!({ "ok": true, "assistants": true }),
+            },
+            BrokerMessage::ListModels(req) => BrokerResponse {
+                outcome: self.process_list_models(req).await,
             },
             BrokerMessage::ListAssistants(req) => BrokerResponse {
                 outcome: self.process_list_assistants(req).await,
@@ -1453,6 +1456,31 @@ impl DelegationListener {
         serde_json::json!({ "assistants": self.broker.assistant_roster().await })
     }
 
+    async fn process_list_models(&self, req: BrokerListModelsRequest) -> Value {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return serde_json::json!({"models": [], "error": "invalid token"});
+        };
+        if entry.agent_hosts_tools {
+            return serde_json::json!({"models": [], "error": "tool is unavailable for this agent"});
+        }
+        let Some(agent_type) = crate::models::AgentType::from_wire(&req.agent_type) else {
+            return serde_json::json!({"models": [], "error": "invalid agent_type"});
+        };
+        match self
+            .broker
+            .list_models(
+                &entry.parent_connection_id,
+                agent_type,
+                Some(entry.working_dir.to_string_lossy().into_owned()),
+                req.model,
+            )
+            .await
+        {
+            Ok(models) => serde_json::json!({"agent_type": req.agent_type, "models": models}),
+            Err(error) => serde_json::json!({"models": [], "error": error}),
+        }
+    }
+
     async fn process(&self, req: BrokerRequest) -> DelegationTaskReport {
         // 1. Token + parent_connection_id consistency check. Treat both as
         //    "canceled" since the LLM can't usefully react to either —
@@ -1527,7 +1555,13 @@ impl DelegationListener {
             external_handle: req.external_handle,
             assistant,
         };
-        self.broker.start_delegation(delegation_req).await
+        let selection: super::models::ModelSelection = match serde_json::from_value(req.input) {
+            Ok(selection) => selection,
+            Err(error) => return report_failed("invalid_configuration", &error.to_string()),
+        };
+        self.broker
+            .start_delegation_with_selection(delegation_req, selection)
+            .await
     }
 
     async fn assistant_not_found(&self, asked: &str) -> DelegationTaskReport {
@@ -4747,6 +4781,87 @@ mod tests {
             )
             .await;
         (make_listener(broker, tokens.clone(), Some(1)), tokens)
+    }
+
+    #[tokio::test]
+    async fn assistant_delegation_accepts_explicit_model_and_keeps_identity() {
+        let mock = Arc::new(MockSpawner::new());
+        *mock.options.lock().await = serde_json::from_value(json!({
+            "modes": null,
+            "config_options": [{"id":"model", "name":"Model", "description":null,
+                "category":"model", "kind":{"type":"select", "current_value":"alpha",
+                    "options":[{"value":"alpha","name":"Alpha","description":null}], "groups":[]}}]
+        }))
+        .unwrap();
+        mock.queue_spawn(Ok("selected-child".into())).await;
+        mock.queue_send(Ok(42)).await;
+        let (listener, _) = assistant_listener(mock.clone()).await;
+        let report = serve(
+            listener,
+            call(json!({
+                "assistant_id": 3, "agent_type": "claude_code", "task": "review", "model": "alpha"
+            })),
+        )
+        .await;
+        assert_eq!(report["assistant_id"], 3);
+        assert_eq!(report["status"], "running");
+        let spawns = mock.spawn_args.lock().await;
+        assert_eq!(spawns[0].agent_type, AgentType::Codex);
+        assert_eq!(
+            spawns[0]
+                .preferred_config_values
+                .get("model")
+                .map(String::as_str),
+            Some("alpha")
+        );
+        let sends = mock.send_args.lock().await;
+        let assistant = sends[0].link.assistant.as_ref().unwrap();
+        assert_eq!(assistant.id, 3);
+        assert_eq!(
+            assistant
+                .snapshot
+                .agent_options
+                .config_values
+                .get("model")
+                .map(String::as_str),
+            Some("alpha")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_models_requires_token_and_host_tool_access() {
+        let (listener, tokens) = assistant_listener(Arc::new(MockSpawner::new())).await;
+        let request = |token: &str| BrokerListModelsRequest {
+            token: token.into(),
+            agent_type: "codex".into(),
+            model: None,
+        };
+        let invalid = listener.process_list_models(request("invalid")).await;
+        assert_eq!(invalid["error"], "invalid token");
+        tokens
+            .register(
+                "hosted".into(),
+                TokenEntry {
+                    agent_hosts_tools: true,
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        let hosted = listener.process_list_models(request("hosted")).await;
+        assert!(hosted.get("error").is_some());
+        let allowed = serve(listener.clone(), BrokerMessage::ListModels(request("tok"))).await;
+        assert_eq!(allowed["models"], json!([]));
+        assert!(allowed.get("error").is_none());
+        listener
+            .broker
+            .set_config(DelegationConfig::default())
+            .await;
+        assert!(listener
+            .process_list_models(request("tok"))
+            .await
+            .get("error")
+            .is_some());
     }
 
     async fn serve(listener: Arc<DelegationListener>, msg: BrokerMessage) -> Value {

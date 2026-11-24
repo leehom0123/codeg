@@ -58,7 +58,7 @@ use crate::acp::delegation::transport::{
     client_computer_launch_round_trip, client_computer_snapshot_round_trip,
     client_computer_verify_round_trip, client_computer_windows_round_trip,
     client_create_automation_round_trip, client_create_work_task_round_trip,
-    client_feedback_round_trip, client_list_assistants_round_trip, client_ping,
+    client_feedback_round_trip, client_list_assistants_round_trip, client_list_models_round_trip, client_ping,
     client_rename_session_round_trip, client_result_schema_round_trip,
     client_resume_task_round_trip, client_round_trip, client_session_round_trip,
     client_status_round_trip, client_submit_result_round_trip, client_task_complete_round_trip,
@@ -70,7 +70,7 @@ use crate::acp::delegation::transport::{
     BrokerComputerClipboardRequest, BrokerComputerLaunchRequest, BrokerComputerSnapshotRequest,
     BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
     BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest,
-    BrokerRenameSessionRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
+    BrokerListModelsRequest, BrokerRenameSessionRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
     BrokerResumeTaskRequest, BrokerSessionHistoryRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
@@ -321,6 +321,7 @@ impl CompanionFeatures {
                 self.computer && self.computer_clipboard
             }
             "delegate_to_agent"
+            | "list_models"
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
@@ -904,6 +905,27 @@ async fn build_tools_call_spawn(
         return LineAction::Respond(err(id, -32602, format!("unknown tool: {name}")));
     }
     match name.as_str() {
+        "list_models" => {
+            let agent_type = match arguments.get("agent_type").and_then(Value::as_str) {
+                Some(value) if !value.is_empty() => value.to_owned(),
+                _ => {
+                    return LineAction::Respond(err(id, -32602, "list_models requires agent_type"))
+                }
+            };
+            let model = match arguments.get("model") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) => Some(value.clone()),
+                _ => return LineAction::Respond(err(id, -32602, "model must be a string")),
+            };
+            let request = BrokerListModelsRequest {
+                token: ctx.token.clone(),
+                agent_type,
+                model,
+            };
+            let round_trip =
+                Box::pin(async move { client_list_models_round_trip(&socket, &request).await });
+            register_and_spawn(inflight, id, None, round_trip, render_models_result).await
+        }
         "delegate_to_agent" => {
             // MCP clients (Codex / Claude Code) generally do NOT populate
             // `_meta.tool_use_id` when calling an MCP server. We still surface it
@@ -1911,6 +1933,14 @@ fn normalize_status_task_ids(arguments: &Value) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+fn render_models_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": outcome.to_string()}],
+        "structuredContent": outcome,
+        "isError": outcome.get("error").is_some(),
+    })
 }
 
 /// Render the `get_delegation_status` round-trip outcome (always a
@@ -4767,14 +4797,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_four_delegation_tools() {
+    async fn tools_list_returns_five_delegation_tools() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let resp = unwrap_respond(dispatch_for_test(line).await);
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 5);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"delegate_to_agent"));
+        assert!(names.contains(&"list_models"));
         assert!(names.contains(&"get_delegation_status"));
         assert!(names.contains(&"cancel_delegation"));
         assert!(names.contains(&"resume_delegation"));
@@ -4797,6 +4828,8 @@ mod tests {
             .iter()
             .find(|t| t["name"] == "delegate_to_agent")
             .unwrap();
+        assert!(delegate["inputSchema"]["properties"]["model"].is_object());
+        assert!(delegate["inputSchema"]["properties"]["reasoning"].is_object());
         let agents = delegate["inputSchema"]["properties"]["agent_type"]["enum"]
             .as_array()
             .unwrap();
@@ -5419,6 +5452,18 @@ mod tests {
             .collect()
     }
 
+    #[tokio::test]
+    async fn list_models_follows_delegation_feature_and_validates_arguments() {
+        assert!(CompanionFeatures::parse(None).allows_tool("list_models"));
+        assert!(!CompanionFeatures::parse(Some("feedback")).allows_tool("list_models"));
+        let bad = unwrap_respond(dispatch_for_test(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_models","arguments":{}}}"#,
+        ).await);
+        assert_eq!(bad.error.unwrap().code, -32602);
+        let rendered = render_models_result(&json!({"models": [], "error": "disabled"}));
+        assert_eq!(rendered["isError"], true);
+    }
+
     #[test]
     fn features_parse_defaults_and_tokens() {
         // Absent → delegation-only (backward compatible).
@@ -5447,7 +5492,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 4);
+        assert_eq!(names.len(), 5);
     }
 
     #[tokio::test]
@@ -5456,7 +5501,7 @@ mod tests {
             dispatch_with_features(BOTH, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 6);
     }
 
     #[tokio::test]

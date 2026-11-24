@@ -30,6 +30,7 @@ import { GitLogTab } from "./aux-panel-git-log-tab"
 import { AutomationsAuxTab } from "./aux-panel-automations-tab"
 import { TasksAuxTab } from "./aux-panel-tasks-tab"
 import { ForgeAuxTab } from "./aux-panel-forge-tab"
+import { ProjectKnowledgeTab } from "./aux-panel-project-knowledge-tab"
 
 const LAZY_TABS: AuxPanelTab[] = [
   "file_tree",
@@ -39,6 +40,7 @@ const LAZY_TABS: AuxPanelTab[] = [
   "tasks",
   "issues",
   "pull_requests",
+  "project_knowledge",
 ]
 
 /** What the tab switchers list while the folder tabs are hidden. */
@@ -157,6 +159,18 @@ export function AuxPanel() {
       >
         {mountedTabs.has("issues") ? (
           <ForgeAuxTab auxTab="issues" forgeTab="issues" />
+        ) : null}
+      </TabsContent>
+      <TabsContent
+        value="project_knowledge"
+        forceMount
+        className="mt-0 flex-1 min-h-0 overflow-hidden"
+      >
+        {mountedTabs.has("project_knowledge") && projectFolderId != null ? (
+          <ProjectKnowledgeTab
+            projectKey={String(projectFolderId)}
+            sessionTabId={sessionTabId}
+          />
         ) : null}
       </TabsContent>
       <TabsContent

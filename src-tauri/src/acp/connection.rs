@@ -8460,6 +8460,7 @@ struct CompanionFeatureFlags {
     feedback: bool,
     ask: bool,
     sessions: bool,
+    project_knowledge: bool,
     /// Per-spawn (task-engine launches only), not a settings toggle — on its own
     /// it still injects the companion so a task session always has its reporting
     /// tools.
@@ -8511,6 +8512,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     }
     if flags.sessions {
         features.push("sessions");
+    }
+    if flags.project_knowledge {
+        features.push("project_knowledge");
     }
     if flags.tasks {
         features.push("tasks");
@@ -8651,6 +8655,7 @@ where
         feedback: feedback_enabled,
         ask: injection.ask.is_enabled().await,
         sessions: injection.sessions.is_enabled().await,
+        project_knowledge: host_tools.hosts_channels(),
         tasks: groups.tasks,
         result: groups.result,
         automations: authoring.automations_enabled,
@@ -48201,6 +48206,7 @@ mod tests {
                 feedback: true,
                 ask: true,
                 sessions: true,
+                project_knowledge: false,
                 tasks: true,
                 result: true,
                 automations: true,

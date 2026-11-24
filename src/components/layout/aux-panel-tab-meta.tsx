@@ -9,6 +9,7 @@ import {
   GitCommit,
   GitPullRequestArrow,
   ListTodo,
+  NotebookPen,
   ReceiptText,
   Zap,
   type LucideIcon,
@@ -35,6 +36,7 @@ export const TAB_ICONS: Record<AuxPanelTab, LucideIcon> = {
   git_log: GitCommit,
   automations: Zap,
   tasks: ListTodo,
+  project_knowledge: NotebookPen,
   issues: CircleDot,
   pull_requests: GitPullRequestArrow,
 }
@@ -88,6 +90,7 @@ export function useAuxTabLabel(active: boolean): (tab: AuxPanelTab) => string {
   const tDetails = useTranslations("Folder.sessionDetails")
   const tAutomations = useTranslations("Automations")
   const tTasks = useTranslations("Tasks")
+  const tKnowledge = useTranslations("ProjectKnowledge")
   const tForge = useTranslations("Forge")
   const projectFolderId = useActiveProjectFolderId()
   const forgeProvider = useFolderForgeProvider(active ? projectFolderId : null)
@@ -101,6 +104,8 @@ export function useAuxTabLabel(active: boolean): (tab: AuxPanelTab) => string {
           return tAutomations("title")
         case "tasks":
           return tTasks("title")
+        case "project_knowledge":
+          return tKnowledge("title")
         case "issues":
           return tForge("tabIssues")
         case "pull_requests":
@@ -113,6 +118,6 @@ export function useAuxTabLabel(active: boolean): (tab: AuxPanelTab) => string {
           return t(FOLDER_TAB_LABEL_KEY[tab])
       }
     },
-    [t, tDetails, tAutomations, tTasks, tForge, forgeProvider]
+    [t, tDetails, tAutomations, tTasks, tKnowledge, tForge, forgeProvider]
   )
 }

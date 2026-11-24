@@ -1790,8 +1790,12 @@ impl DelegationListener {
             assistant,
             asked: Some(asked),
         };
+        let selection: super::models::ModelSelection = match serde_json::from_value(req.input) {
+            Ok(selection) => selection,
+            Err(error) => return report_failed("invalid_configuration", &error.to_string()),
+        };
         self.broker
-            .start_delegation_with_delivery(delegation_req, notify_mode, follow)
+            .start_delegation_with_options(delegation_req, notify_mode, follow, selection)
             .await
     }
 

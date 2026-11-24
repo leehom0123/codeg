@@ -59,6 +59,7 @@ pub mod session_info;
 pub mod session_title;
 pub mod session_state;
 pub mod session_messages;
+pub(crate) mod session_preferences;
 pub mod stderr_tail;
 pub mod temp_reclaim;
 pub mod terminal_runtime;

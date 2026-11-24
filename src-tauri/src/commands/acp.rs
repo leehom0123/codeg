@@ -12317,25 +12317,58 @@ pub async fn acp_connect(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    acp_connect_core(
+        &db,
+        &manager,
+        &app_data_dir,
+        agent_type,
+        working_dir,
+        session_id,
+        window.label().to_string(),
+        EventEmitter::from_app(&app_handle),
+        preferred_mode_id,
+        preferred_config_values,
+    )
+    .await
+    .map(|outcome| outcome.connection_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn acp_connect_core(
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    data_dir: &std::path::Path,
+    agent_type: AgentType,
+    working_dir: Option<String>,
+    session_id: Option<String>,
+    owner_window: String,
+    emitter: EventEmitter,
+    preferred_mode_id: Option<String>,
+    preferred_config_values: Option<BTreeMap<String, String>>,
+) -> Result<crate::acp::manager::SpawnOutcome, AcpError> {
     let runtime_env =
-        build_session_runtime_env(&db, agent_type, session_id.as_deref(), &app_data_dir).await?;
-
-    // Guard: the session page must never trigger a download or install.
-    // If the agent isn't ready, return SdkNotInstalled here so the frontend
-    // can prompt the user to install it from Agent Settings.
+        build_session_runtime_env(db, agent_type, session_id.as_deref(), data_dir).await?;
+    // Connecting from the session page must never trigger an install.
     verify_agent_installed(agent_type).await?;
-
-    let emitter = EventEmitter::from_app(&app_handle);
+    let mut values = preferred_config_values.unwrap_or_default();
+    let mode = if let Some(saved) =
+        crate::acp::session_preferences::load(&db.conn, agent_type, session_id.as_deref()).await?
+    {
+        values.extend(saved.config_values);
+        saved.mode_id
+    } else {
+        preferred_mode_id
+    };
     manager
-        .spawn_agent(
+        .spawn_agent_with_outcome(
             agent_type,
             working_dir,
             session_id,
             runtime_env,
-            window.label().to_string(),
+            owner_window,
             emitter,
-            preferred_mode_id,
-            preferred_config_values.unwrap_or_default(),
+            mode,
+            values,
         )
         .await
 }
@@ -12371,8 +12404,9 @@ pub async fn acp_set_mode(
     connection_id: String,
     mode_id: String,
     manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
 ) -> Result<(), AcpError> {
-    manager.set_mode(&connection_id, mode_id).await
+    manager.set_mode(&db.conn, &connection_id, mode_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -12382,9 +12416,10 @@ pub async fn acp_set_config_option(
     config_id: String,
     value_id: String,
     manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
 ) -> Result<(), AcpError> {
     manager
-        .set_config_option(&connection_id, config_id, value_id)
+        .set_config_option(&db.conn, &connection_id, config_id, value_id)
         .await
 }
 

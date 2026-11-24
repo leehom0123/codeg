@@ -80,41 +80,22 @@ pub async fn acp_connect(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpConnectParams>,
 ) -> Result<Json<String>, AppCommandError> {
-    let db = &state.db;
-    let manager = &state.connection_manager;
-
-    let runtime_env = acp_commands::build_session_runtime_env(
-        db,
-        params.agent_type,
-        params.session_id.as_deref(),
+    let outcome = acp_commands::acp_connect_core(
+        &state.db,
+        &state.connection_manager,
         &state.data_dir,
+        params.agent_type,
+        params.working_dir,
+        params.session_id,
+        "web".into(),
+        state.emitter.clone(),
+        params.preferred_mode_id,
+        params.preferred_config_values,
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
-    // Guard: the session page must never trigger a download or install.
-    // If the agent isn't ready, return SdkNotInstalled here so the frontend
-    // can prompt the user to install it from Agent Settings.
-    acp_commands::verify_agent_installed(params.agent_type)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-
-    let emitter = state.emitter.clone();
-    let connection_id = manager
-        .spawn_agent(
-            params.agent_type,
-            params.working_dir,
-            params.session_id,
-            runtime_env,
-            "web".to_string(),
-            emitter,
-            params.preferred_mode_id,
-            params.preferred_config_values.unwrap_or_default(),
-        )
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-
-    Ok(Json(connection_id))
+    Ok(Json(outcome.connection_id))
 }
 
 #[derive(Deserialize)]
@@ -413,7 +394,7 @@ pub async fn acp_set_mode(
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.connection_manager;
     manager
-        .set_mode(&params.connection_id, params.mode_id)
+        .set_mode(&state.db.conn, &params.connection_id, params.mode_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
@@ -433,7 +414,12 @@ pub async fn acp_set_config_option(
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.connection_manager;
     manager
-        .set_config_option(&params.connection_id, params.config_id, params.value_id)
+        .set_config_option(
+            &state.db.conn,
+            &params.connection_id,
+            params.config_id,
+            params.value_id,
+        )
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))

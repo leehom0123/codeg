@@ -2144,21 +2144,41 @@ impl ConnectionManager {
         }
     }
 
-    pub async fn set_mode(&self, conn_id: &str, mode_id: String) -> Result<(), AcpError> {
-        let cmd_tx = {
-            let connections = self.connections.lock().await;
-            let conn = connections
-                .get(conn_id)
-                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
-            conn.cmd_tx.clone()
-        };
-        cmd_tx
-            .send(ConnectionCommand::SetMode {
-                mode_id,
-                reply: None,
-            })
+    pub(crate) async fn remember_session_preferences(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+    ) -> Result<(), AcpError> {
+        use super::session_preferences;
+
+        let state = self
+            .get_state(conn_id)
             .await
-            .map_err(|_| AcpError::ProcessExited)
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        let state = state.read().await;
+        if let Some(session_id) = state.external_id.as_deref() {
+            let preferences = session_preferences::from_current(
+                state.current_mode.clone(),
+                state.config_options.as_deref().unwrap_or_default(),
+            );
+            if !preferences.is_empty() {
+                session_preferences::save(db, state.agent_type, session_id, &preferences).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn set_mode(
+        &self,
+        db: &DatabaseConnection,
+        conn_id: &str,
+        mode_id: String,
+    ) -> Result<(), AcpError> {
+        let outcome = self.set_mode_and_wait(conn_id, mode_id.clone()).await?;
+        if matches!(outcome, SetterOutcome::Confirmed { current } if current == mode_id) {
+            self.remember_session_preferences(db, conn_id).await?;
+        }
+        Ok(())
     }
 
     /// [`Self::set_mode`], then wait for the agent's answer to this request —
@@ -2185,25 +2205,18 @@ impl ConnectionManager {
 
     pub async fn set_config_option(
         &self,
+        db: &DatabaseConnection,
         conn_id: &str,
         config_id: String,
         value_id: String,
     ) -> Result<(), AcpError> {
-        let cmd_tx = {
-            let connections = self.connections.lock().await;
-            let conn = connections
-                .get(conn_id)
-                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
-            conn.cmd_tx.clone()
-        };
-        cmd_tx
-            .send(ConnectionCommand::SetConfigOption {
-                config_id,
-                value_id,
-                reply: None,
-            })
-            .await
-            .map_err(|_| AcpError::ProcessExited)
+        let outcome = self
+            .set_config_option_and_wait(conn_id, config_id, value_id.clone())
+            .await?;
+        if matches!(outcome, SetterOutcome::Confirmed { current } if current == value_id) {
+            self.remember_session_preferences(db, conn_id).await?;
+        }
+        Ok(())
     }
 
     /// [`Self::set_config_option`], then wait for the agent's answer, as
@@ -2765,20 +2778,9 @@ impl ConnectionManager {
         // with (they latch every select/boolean the agent accepted), so
         // replaying them as the child's preferred values reproduces the
         // frontend's own connect-time payload without the frontend.
-        let mut preferred_config_values = std::collections::BTreeMap::new();
-        if let Some(options) = &state.config_options {
-            for option in options {
-                let value = match &option.kind {
-                    crate::acp::types::SessionConfigKindInfo::Select(s) => {
-                        s.current_value.clone()
-                    }
-                    crate::acp::types::SessionConfigKindInfo::Boolean(b) => {
-                        b.current_value.to_string()
-                    }
-                };
-                preferred_config_values.insert(option.id.clone(), value);
-            }
-        }
+        let preferred_config_values = super::connection::current_config_option_values(
+            state.config_options.as_deref().unwrap_or_default(),
+        );
         Some(ConnectionLaunchContext {
             emitter: parent.emitter.clone(),
             owner_window_label: parent.owner_window_label.clone(),

@@ -271,6 +271,10 @@ impl SessionCreator {
                         return Err(format!("could not apply {key}={value} for {agent_type}"));
                     }
                 }
+                self.manager
+                    .remember_session_preferences(&self.db, &connection)
+                    .await
+                    .map_err(|error| error.to_string())?;
                 Ok(())
             }
             .await;
@@ -586,36 +590,23 @@ async fn activate_recipient(
         .await
         .map_err(|error| error.to_string())?
         .ok_or("recipient folder is unavailable")?;
-    crate::commands::acp::verify_agent_installed(agent)
-        .await
-        .map_err(|error| error.to_string())?;
-    let env = crate::commands::acp::build_session_runtime_env(
+    let outcome = crate::commands::acp::acp_connect_core(
         &AppDatabase { conn: db.clone() },
-        agent,
-        recipient.external_id.as_deref(),
+        manager,
         data_dir,
+        agent,
+        Some(folder.path),
+        recipient.external_id.clone(),
+        "session-tools".into(),
+        emitter.clone(),
+        None,
+        recipient
+            .model
+            .clone()
+            .map(|model| [("model".into(), model)].into()),
     )
     .await
     .map_err(|error| error.to_string())?;
-    let preferences = recipient
-        .model
-        .clone()
-        .map(|model| ("model".into(), model))
-        .into_iter()
-        .collect();
-    let outcome = manager
-        .spawn_agent_with_outcome(
-            agent,
-            Some(folder.path),
-            recipient.external_id.clone(),
-            env,
-            "session-tools".into(),
-            emitter.clone(),
-            None,
-            preferences,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
     let connection = outcome.connection_id;
     let ready: Result<(), String> = async {
         manager

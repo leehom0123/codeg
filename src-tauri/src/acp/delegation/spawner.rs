@@ -109,6 +109,13 @@ pub trait ConnectionSpawner: Send + Sync {
         requested: &BTreeMap<String, String>,
     ) -> Result<(), SpawnerError>;
 
+    /// Stage the durable delivery subscription before the first child prompt.
+    async fn configure_delivery(
+        &self,
+        connection_id: &str,
+        policy: crate::db::service::turn_delivery_service::DeliveryPolicy,
+    ) -> Result<(), SpawnerError>;
+
     /// Spawn a fresh child ACP connection of `agent_type` in `working_dir`.
     /// Delegation children are always brand-new sessions (no resume), but the
     /// broker may inject per-agent defaults configured in
@@ -361,6 +368,14 @@ pub mod mock {
             }
         }
 
+        async fn configure_delivery(
+            &self,
+            _: &str,
+            _: crate::db::service::turn_delivery_service::DeliveryPolicy,
+        ) -> Result<(), SpawnerError> {
+            Ok(())
+        }
+
         async fn spawn(
             &self,
             parent_connection_id: &str,
@@ -426,14 +441,17 @@ pub mod mock {
             preferred_mode_id: Option<String>,
             preferred_config_values: BTreeMap<String, String>,
         ) -> Result<ResumedSpawn, SpawnerError> {
-            self.resume_spawn_args.lock().await.push(ResumeSpawnCallArgs {
-                parent_connection_id: parent_connection_id.to_string(),
-                agent_type,
-                working_dir,
-                external_session_id: external_session_id.to_string(),
-                preferred_mode_id,
-                preferred_config_values,
-            });
+            self.resume_spawn_args
+                .lock()
+                .await
+                .push(ResumeSpawnCallArgs {
+                    parent_connection_id: parent_connection_id.to_string(),
+                    agent_type,
+                    working_dir,
+                    external_session_id: external_session_id.to_string(),
+                    preferred_mode_id,
+                    preferred_config_values,
+                });
             self.resume_spawn_results
                 .lock()
                 .await

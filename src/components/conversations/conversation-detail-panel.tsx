@@ -1614,10 +1614,24 @@ const ConversationTabView = memo(function ConversationTabView({
   // The right-hand progress panel answers digest questions through this
   // panel's composer (queue guards, optimistic bubble, lifecycle send).
   useEffect(() => {
-    if (dbConversationId == null || dbConversationId <= 0) return
-    registerDigestSender(dbConversationId, handleDigestAnswer)
-    return () => registerDigestSender(dbConversationId, null)
-  }, [dbConversationId, handleDigestAnswer])
+    if (
+      dbConversationId == null ||
+      dbConversationId <= 0 ||
+      !isActive ||
+      !connectionReady ||
+      connStatus !== "connected" ||
+      msgQueue.length > 0
+    )
+      return
+    return registerDigestSender(dbConversationId, handleDigestAnswer)
+  }, [
+    dbConversationId,
+    handleDigestAnswer,
+    isActive,
+    connectionReady,
+    connStatus,
+    msgQueue.length,
+  ])
 
   // "Fork from here": fork at a rendered assistant turn, sending nothing. The
   // ONLY fork entry point — the composer's fork-and-send was removed once this
@@ -2893,7 +2907,11 @@ const GROUP_EDGE_EPSILON = 0.1
 function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
   const isMobile = useIsMobile()
   const { isOpen: sidebarOpen } = useSidebarContext()
-  const { isOpen: auxOpen } = useAuxPanelContext()
+  const { isOpen: auxOpen, openTab: openAuxTab } = useAuxPanelContext()
+  const openSessionProgress = useCallback(
+    () => openAuxTab("session_details"),
+    [openAuxTab]
+  )
   const { mode, conversationMaximized } = useWorkspaceView()
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()
@@ -3431,6 +3449,7 @@ export function ConversationDetailPanel() {
               folderPath={selTabFolder?.path}
               title={selTab.title}
               status={selTab.status as ConversationStatus | undefined}
+              onOpenProgress={openSessionProgress}
             />
           </div>
         )}
@@ -3483,6 +3502,7 @@ export function ConversationDetailPanel() {
             folderPath={activeTabFolder?.path}
             title={activeTab.title}
             status={activeTab.status as ConversationStatus | undefined}
+            onOpenProgress={openSessionProgress}
           />
         )}
         <ContextMenu

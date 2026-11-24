@@ -5770,6 +5770,7 @@ export async function listProviderModels(
 
 export interface DelegationSettings {
   enabled: boolean
+  session_messaging_enabled?: boolean
   depth_limit: number
   /** Per-parent byte budget (in MB) for the broker's in-memory cache of
    * completed sub-agent result text. `0` = unlimited. */

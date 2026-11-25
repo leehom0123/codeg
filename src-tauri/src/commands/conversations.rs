@@ -143,12 +143,7 @@ pub async fn list_conversation_collaborators_core(
     conversation_id: i32,
 ) -> Result<Vec<crate::models::DbConversationSummary>, AppCommandError> {
     let mut collaborators = conversation_service::list_collaborators(conn, conversation_id).await?;
-    collaborators.extend(
-        conversation_service::list_children(conn, conversation_id)
-            .await?
-            .into_iter()
-            .filter(|child| child.kind == crate::db::entities::conversation::ConversationKind::Delegate),
-    );
+    collaborators.extend(conversation_service::list_children(conn, conversation_id).await?);
     Ok(collaborators)
 }
 

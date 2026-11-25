@@ -72,12 +72,12 @@ use crate::acp::delegation::transport::{
     BrokerComputerVerifyRequest, BrokerComputerWindowsRequest, BrokerCreateAutomationRequest,
     BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerListAssistantsRequest,
     BrokerRenameSessionRequest, BrokerRequest, BrokerResponse, BrokerResultSchemaRequest,
-    BrokerResumeTaskRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
+    BrokerResumeTaskRequest, BrokerSessionHistoryRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerSubmitResultRequest,
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
 use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
 use crate::acp::question::parse_questions;
-use crate::acp::session_info::MAX_SESSION_MESSAGES;
+use crate::acp::session_info::{SessionHistoryOptions, MAX_SESSION_MESSAGES};
 use crate::models::AutomationAction;
 
 /// Upper bound on one broker-side cancel round-trip. Bounds both
@@ -300,7 +300,7 @@ impl CompanionFeatures {
         match name {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
-            "get_session_info" | "rename_session" => self.sessions,
+            "get_session_info" | "rename_session" | "read_session_history" => self.sessions,
             "project_knowledge" => self.project_knowledge,
             "task_progress" | "task_complete" => self.tasks,
             "submit_result" => self.result,
@@ -1358,7 +1358,58 @@ async fn build_tools_call_spawn(
                 Box::pin(async move { client_rename_session_round_trip(&socket, req).await });
             register_and_spawn(inflight, id, None, round_trip, render_session_control_result).await
         }
+        "read_session_history" => {
+            let Some(session_id) = parse_session_id(&arguments) else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "read_session_history requires an integer session_id",
+                ));
+            };
+            let options = match serde_json::from_value::<SessionHistoryOptions>(arguments.clone()) {
+                Ok(options) if options.limit > 0 => options,
+                _ => return LineAction::Respond(err(id, -32602,
+                    "History options require limit >= 1, string before/query, boolean include_tools, and non-negative integer max_chars")),
+            };
+            let req = BrokerSessionHistoryRequest {
+                token: ctx.token.clone(),
+                session_id,
+                options,
+            };
+            let round_trip = Box::pin(async move {
+                super::transport::client_session_history_round_trip(&socket, &req).await
+            });
+            register_and_spawn(
+                inflight,
+                id,
+                None,
+                round_trip,
+                render_session_history_result,
+            )
+            .await
+        }
         "project_knowledge" => {
+            let request = match serde_json::from_value(arguments) {
+                Ok(request) => request,
+                Err(error) => return LineAction::Respond(err(id, -32602, error.to_string())),
+            };
+            let message = super::transport::BrokerMessage::ProjectKnowledge {
+                token: ctx.token.clone(),
+                request,
+            };
+            let round_trip =
+                Box::pin(
+                    async move { super::transport::message_round_trip(&socket, &message).await },
+                );
+            register_and_spawn(inflight, id, None, round_trip, |outcome| {
+                json!({
+                    "isError": outcome.get("error").is_some(),
+                    "content": [{ "type": "text", "text": outcome.to_string() }],
+                    "structuredContent": outcome,
+                })
+            })
+            .await
+        }
         "get_session_info" => {
             // `session_id` is the codeg conversation id the agent read out of a
             // `codeg://session/<id>` reference. Accept a JSON number or a numeric
@@ -2683,6 +2734,16 @@ fn render_session_control_result(outcome: &Value) -> Value {
         "content": [{"type": "text", "text": outcome.to_string()}],
         "structuredContent": outcome,
         "isError": outcome.get("error").is_some(),
+    })
+}
+
+/// JSON text keeps IDs, paging flags, tool previews, and truncation visible on
+/// hosts that do not surface structuredContent. Do not duplicate the history
+/// into structuredContent: max_chars covers one returned history envelope.
+pub fn render_session_history_result(outcome: &Value) -> Value {
+    json!({
+        "content": [{ "type": "text", "text": outcome.to_string() }],
+        "isError": false,
     })
 }
 
@@ -4914,6 +4975,31 @@ fn render_session_summary_text(o: &Value) -> String {
     {
         out.push_str(&format!("Total tokens: {tokens}\n"));
     }
+    if let Some(children) = o
+        .get("children")
+        .and_then(Value::as_array)
+        .filter(|c| !c.is_empty())
+    {
+        out.push_str("Delegation children (persisted conversation status):\n");
+        for child in children {
+            let id = child.get("session_id").and_then(Value::as_i64).unwrap_or(0);
+            let task = child
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let status = child
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            out.push_str(&format!(
+                "- session #{id}: task_id={task}, status={status}\n"
+            ));
+        }
+        if o.get("children_truncated").and_then(Value::as_bool) == Some(true) {
+            out.push_str("Additional children omitted (limit 200).\n");
+        }
+        out.push_str("Use get_delegation_status for detailed task reports.\n");
+    }
     if let Some(collaborators) = o.get("collaborators").and_then(Value::as_array).filter(|rows| !rows.is_empty()) {
         out.push_str("Independent collaboration sessions:\n");
         for row in collaborators {
@@ -6252,7 +6338,7 @@ mod tests {
             dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
         assert!(!names.contains(&"get_session_info".to_string()));
-        // The sessions group exposes both lookup and rename.
+        // The sessions group exposes lookup, rename, and history.
         let names = list_tool_names(
             dispatch_with_features(
                 SESSIONS_ONLY,
@@ -6262,7 +6348,7 @@ mod tests {
         );
         assert_eq!(
             names,
-            vec!["rename_session".to_string(), "get_session_info".to_string()]
+            vec!["rename_session".to_string(), "get_session_info".to_string(), "read_session_history".to_string()]
         );
     }
 
@@ -6302,6 +6388,34 @@ mod tests {
                 LineAction::Respond(response) => assert_eq!(response.error.unwrap().code, -32602),
                 _ => panic!("invalid rename arguments must be rejected"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn read_session_history_dispatch_and_gate() {
+        let line = json!({"jsonrpc":"2.0", "id":31, "method":"tools/call",
+            "params":{"name":"read_session_history", "arguments":{"session_id":"214", "before":"original-turn", "query":"needle", "include_tools":true}}}).to_string();
+        assert!(matches!(
+            dispatch_with_features(SESSIONS_ONLY, &line).await,
+            LineAction::Spawn(_)
+        ));
+        let error = unwrap_respond(dispatch_for_test(&line).await).error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("unknown tool"));
+        for args in [
+            json!({}),
+            json!({"session_id":1,"limit":0}),
+            json!({"session_id":1,"before":3}),
+            json!({"session_id":1,"include_tools":"true"}),
+            json!({"session_id":1,"max_chars":-1}),
+        ] {
+            let line = json!({"jsonrpc":"2.0", "id":32, "method":"tools/call",
+                "params":{"name":"read_session_history", "arguments":args}})
+            .to_string();
+            let error = unwrap_respond(dispatch_with_features(SESSIONS_ONLY, &line).await)
+                .error
+                .unwrap();
+            assert_eq!(error.code, -32602);
         }
     }
 

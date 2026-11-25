@@ -222,6 +222,13 @@ pub struct BrokerRenameSessionRequest {
 pub struct BrokerStopSessionRequest {
     pub token: String,
     pub session_id: Option<i32>,
+/// Read transcript history with the same token and readable-session scope as
+/// BrokerSessionRequest. Options are re-bounded by the production resolver.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerSessionHistoryRequest {
+    pub token: String,
+    pub session_id: i32,
+    pub options: crate::acp::session_info::SessionHistoryOptions,
 }
 
 /// Report a progress milestone for the work task driving the parent session.
@@ -513,6 +520,7 @@ pub enum BrokerMessage {
         token: String,
         request: crate::commands::project_knowledge::Request,
     },
+    SessionHistory(BrokerSessionHistoryRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     ResultSchema(BrokerResultSchemaRequest),
@@ -905,6 +913,11 @@ pub async fn client_rename_session_round_trip(
     req: BrokerRenameSessionRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::RenameSession(req)).await
+pub async fn client_session_history_round_trip(
+    socket_path: &str,
+    req: &BrokerSessionHistoryRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionHistory(req.clone())).await
 }
 
 /// Dispatch a `get_session_info` request and read back the serialized

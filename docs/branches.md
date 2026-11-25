@@ -38,7 +38,7 @@ git push fork release/custom
 
 ## 分支清单
 
-状态截至 2026-11-25。custom 已同步上游 main 的 `cd349fd61`。"自有提交"指不属于上游 main 的提交数。
+状态截至 2026-11-25。custom 已同步上游 main 的 `47d9f770f`。"自有提交"指不属于上游 main 的提交数。
 
 ### 已合入 release/custom
 

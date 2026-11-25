@@ -1760,9 +1760,9 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
 }
 
 /// Backfill each summary's `child_count` with its number of direct, non-deleted
-/// delegation children using ONE `GROUP BY` aggregate over the whole set (never
+/// sidebar children using ONE `GROUP BY` aggregate over the whole set (never
 /// per-row — no N+1). `child_count > 0` iff `list_children` would return rows
-/// (same `parent_id == id AND deleted_at IS NULL` predicate), so the sidebar
+/// with the same filters, so the sidebar
 /// chevron neither expands to nothing nor hides a real subtree. No-op on an
 /// empty slice (avoids an `IN ()`).
 async fn fill_child_counts(
@@ -1779,11 +1779,8 @@ async fn fill_child_counts(
         .column_as(conversation::Column::Id.count(), "cnt")
         .filter(conversation::Column::ParentId.is_in(ids))
         .filter(conversation::Column::DeletedAt.is_null())
-        // Delegation children only: a `/btw` row also names a parent, but it
-        // lives in the folder's btw section, not the parent's subtree, so it
-        // must not light the chevron. Mirrors `list_children` exactly, keeping
-        // "`child_count > 0` iff `list_children` would return rows" true.
-        .filter(conversation::Column::Kind.is_in([ConversationKind::Delegate, ConversationKind::Ask]))
+        // `/btw` rows appear in their own section. Mirror `list_children`.
+        .filter(conversation::Column::Kind.ne(ConversationKind::Btw))
         .group_by(conversation::Column::ParentId)
         .into_tuple()
         .all(conn)
@@ -2156,9 +2153,7 @@ pub async fn list_children(
     let rows = conversation::Entity::find()
         .filter(conversation::Column::ParentId.eq(parent_conversation_id))
         .filter(conversation::Column::DeletedAt.is_null())
-        // Delegation children only — see `fill_child_counts` for the why, and
-        // for the chevron-equivalence invariant this upholds.
-        .filter(conversation::Column::Kind.is_in([ConversationKind::Delegate, ConversationKind::Ask]))
+        .filter(conversation::Column::Kind.ne(ConversationKind::Btw))
         .order_by_desc(conversation::Column::CreatedAt)
         // Explicit id tie-break so same-timestamp siblings are deterministic and
         // match the frontend re-sort (which tie-breaks id DESC): the raw fetch

@@ -3220,7 +3220,7 @@ impl ConnectionManager {
                     let title_locked = current.title_locked;
                     // The sibling keeps the original's sidebar routing (a forked
                     // chat conversation must stay in the Chat group, a forked
-                    // ask under the same conversation). `Delegate` is
+                    // ask or check under the same conversation). `Delegate` is
                     // unreachable here — children are never forked from the
                     // UI — but a delegation is one tool call of its parent's,
                     // which the sibling is not, so it degrades to a root
@@ -3228,6 +3228,7 @@ impl ConnectionManager {
                     let (sibling_kind, sibling_parent_id) = match current.kind {
                         ConversationKind::Delegate | ConversationKind::Btw => (ConversationKind::Regular, None),
                         ConversationKind::Ask => (ConversationKind::Ask, current.parent_id),
+                        ConversationKind::Check => (ConversationKind::Check, current.parent_id),
                         ref kind => (kind.clone(), None),
                     };
                     // The pre-fork history was started where the original was.

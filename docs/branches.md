@@ -38,7 +38,7 @@ git push fork release/custom
 
 ## 分支清单
 
-状态截至 2026-11-25。"自有提交"指不属于上游 main 的提交数。
+状态截至 2026-11-25。custom 已同步上游 main 的 `68b17041e`。"自有提交"指不属于上游 main 的提交数。
 
 ### 已合入 release/custom
 
@@ -54,7 +54,7 @@ git push fork release/custom
 | feat/delegation-delivery-core | 委派结果持久回投和持续上报 | [#1302](https://github.com/spacering-net/codeg/pull/1302) 草稿 | 已随会话进度合入 |
 | feat/session-progress-stacked | 会话 Brief、Digest 和协作关系侧栏 | [#1303](https://github.com/spacering-net/codeg/pull/1303) 草稿 | 已合入会话进度 |
 | feat/delegation-model-options | 委派时指定模型和推理档位 | [#1304](https://github.com/spacering-net/codeg/pull/1304) 草稿 | 已合入，复用 list_agent_options 与 ACP 启动配置 |
-| fix/personal-agent-aux-path | Windows 兼容的个人助理侧栏目录 | 无 | 已随上游同步合入 |
+| fix/personal-agent-aux-path | Windows 兼容的个人助理侧栏目录 | 无 | 已合入，目录统一为上游的 `aux-parts` |
 
 ### 未合入 release/custom
 

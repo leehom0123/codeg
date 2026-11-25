@@ -67,6 +67,7 @@ mod m20261125_000001_personal_agent;
 mod m20261125_000002_session_delivery;
 mod m20261125_000003_conversation_context;
 mod m20261125_000004_session_digest;
+mod m20261125_000005_refresh_btw_instructions;
 
 pub struct Migrator;
 
@@ -141,6 +142,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261125_000002_session_delivery::Migration),
             Box::new(m20261125_000003_conversation_context::Migration),
             Box::new(m20261125_000004_session_digest::Migration),
+            Box::new(m20261125_000005_refresh_btw_instructions::Migration),
         ]
     }
 }

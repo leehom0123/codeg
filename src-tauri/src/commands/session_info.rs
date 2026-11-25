@@ -1330,9 +1330,11 @@ mod tests {
         let session = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
             .await
             .unwrap();
-        let lookup = DbSessionInfoLookup::new(Arc::new(AppDatabase {
-            conn: db.conn.clone(),
-        }));
+        let lookup = DbSessionInfoLookup::new(
+            Arc::new(AppDatabase { conn: db.conn.clone() }),
+            EventEmitter::Noop,
+            SessionInfoRuntimeConfig::new(),
+        );
         let _permits = lookup
             .parse_limit
             .clone()

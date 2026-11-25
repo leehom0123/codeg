@@ -143,6 +143,8 @@ pub struct SessionChild {
     pub session_id: i32,
     pub task_id: Option<String>,
     pub status: String,
+}
+
 /// History is bounded independently from the compact session preview.
 pub const MAX_HISTORY_CHARS: u32 = 16_000;
 
@@ -228,6 +230,8 @@ pub trait SessionInfoAccess: Send + Sync {
     /// The listener supplies the caller from its authenticated connection.
     async fn rename(&self, _caller_id: i32, _session_id: i32, _title: String) -> Result<(), String> {
         Err("Session rename is unavailable".into())
+    }
+
     async fn read_history(
         &self,
         session_id: i32,

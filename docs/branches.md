@@ -44,7 +44,7 @@ git push fork release/custom
 
 | 分支 | 用途 | 上游 PR | 备注 |
 |---|---|---|---|
-| feat/btw-side-question | 会话旁路提问 | [#1251](https://github.com/spacering-net/codeg/pull/1251) open | 已合入 |
+| feat/btw-side-question | 会话旁路提问 | [#1251](https://github.com/spacering-net/codeg/pull/1251) open | 已合入，0.48.3 允许按普通会话权限执行和委派 |
 | feat/enter-steer-f2-rename | 回车转向排队消息、F2 重命名 | [#1208](https://github.com/spacering-net/codeg/pull/1208) open | 已合入 |
 | feat/live-output-auto-reload | 输出文件实时自动重载 | [#775](https://github.com/spacering-net/codeg/pull/775) open | 已合入 |
 | fix/sidebar-subsession-disclosure | 子会话折叠箭头配色修复 | [#1122](https://github.com/spacering-net/codeg/pull/1122) open | 已合入 custom；上游 PR 仍开着 |

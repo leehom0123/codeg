@@ -46,7 +46,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build:
+  build_windows:
     name: Server and Desktop ${{ matrix.platform }}
     needs: web
     strategy:
@@ -58,13 +58,8 @@ jobs:
             suffix: .exe
             target: x86_64-pc-windows-msvc
             bundles: nsis
-          - runner: ubuntu-22.04
-            platform: linux-x64
-            suffix: ""
-            target: x86_64-unknown-linux-gnu
-            bundles: deb,rpm
     runs-on: ${{ matrix.runner }}
-    steps:
+    steps: &build_steps
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -141,6 +136,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           BUNDLES: ${{ matrix.bundles }}
         run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then export CARGO_BUILD_JOBS=2; fi
           pnpm tauri build --target "$TARGET" --bundles "$BUNDLES" \
             --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
 
@@ -162,13 +158,29 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
           if-no-files-found: error
 
-  publish:
-    name: Publish custom release
-    needs: build
+  build_linux:
+    name: Server and Desktop ${{ matrix.platform }}
+    needs: web
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x64
+            suffix: ""
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm
+    runs-on: ${{ matrix.runner }}
+    steps: *build_steps
+
+  publish_windows:
+    name: Publish Windows packages
+    needs: build_windows
+    env:
+      PLATFORM: windows-x64
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-    steps:
+    steps: &publish_steps
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -181,10 +193,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@v4
         with:
-          pattern: codeg-*
+          pattern: codeg-*-${{ env.PLATFORM }}
           path: artifacts
 
-      - name: Publish Windows and Linux packages
+      - name: Sign and publish packages
         env:
           GH_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CODEG_CUSTOM_SIGNING_KEY }}
@@ -195,47 +207,50 @@ jobs:
           build_id="${version}-custom-${SOURCE_SHA:0:8}"
           shopt -s nullglob globstar
 
-          windows_server="codeg-server-${build_id}-windows-x64"
-          linux_server="codeg-server-${build_id}-linux-x64"
-          windows_desktop=(artifacts/codeg-desktop-"${build_id}"-windows-x64/**/*.exe)
-          linux_deb=(artifacts/codeg-desktop-"${build_id}"-linux-x64/**/*.deb)
-          linux_rpm=(artifacts/codeg-desktop-"${build_id}"-linux-x64/**/*.rpm)
-          test -f "artifacts/${windows_server}/codeg-server.exe"
-          test -f "artifacts/${linux_server}/${linux_server}.tar.gz"
-          test "${#windows_desktop[@]}" -eq 1
-          test "${#linux_deb[@]}" -eq 1
-          test "${#linux_rpm[@]}" -eq 1
-
           release_status="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)"
-          if [[ "$release_status" == false ]]; then
-            exit 0
+          server="codeg-server-${build_id}-${PLATFORM}"
+          desktop_dir="artifacts/codeg-desktop-${build_id}-${PLATFORM}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/$tag"
+          if [[ "$PLATFORM" == windows-x64 ]]; then
+            if [[ "$release_status" == false ]]; then exit 0; fi
+            desktop=("$desktop_dir"/**/*.exe)
+            keys=(windows-x86_64)
+            test "${#desktop[@]}" -eq 1
+            test -f "artifacts/$server/codeg-server.exe"
+            archive=codeg-server-windows-x64.zip
+            (cd "artifacts/$server" && zip -qr "../../$archive" .)
+            jq -n --arg version "$version" '{version: $version, platforms: {}}' > latest.json
+          else
+            test "$release_status" = false
+            deb=("$desktop_dir"/**/*.deb)
+            rpm=("$desktop_dir"/**/*.rpm)
+            test "${#deb[@]}" -eq 1
+            test "${#rpm[@]}" -eq 1
+            desktop=("${deb[0]}" "${rpm[0]}")
+            keys=(linux-x86_64-deb linux-x86_64-rpm)
+            archive=codeg-server-linux-x64.tar.gz
+            cp "artifacts/$server/$server.tar.gz" "$archive"
+            gh release download "$tag" --pattern latest.json
+            jq -e --arg version "$version" '.version == $version and (.platforms["windows-x86_64"] != null)' latest.json >/dev/null
           fi
 
-          (cd "artifacts/${windows_server}" && zip -qr ../../codeg-server-windows-x64.zip .)
-          cp "artifacts/${linux_server}/${linux_server}.tar.gz" codeg-server-linux-x64.tar.gz
-          assets=(codeg-server-windows-x64.zip codeg-server-linux-x64.tar.gz
-            "${windows_desktop[@]}" "${linux_deb[@]}" "${linux_rpm[@]}")
+          assets=("$archive" "${desktop[@]}")
           for asset in "${assets[@]}"; do
             pnpm tauri signer sign --app-version "$version" "$asset"
           done
-          jq -n --arg version "$version" \
-            --arg base "https://github.com/${GITHUB_REPOSITORY}/releases/download/$tag" \
-            --arg win "$(basename "${windows_desktop[0]}")" \
-            --arg deb "$(basename "${linux_deb[0]}")" \
-            --arg rpm "$(basename "${linux_rpm[0]}")" \
-            --rawfile win_sig "${windows_desktop[0]}.sig" \
-            --rawfile deb_sig "${linux_deb[0]}.sig" \
-            --rawfile rpm_sig "${linux_rpm[0]}.sig" '
-            {version: $version, platforms: {
-              "windows-x86_64": {url: ($base + "/" + $win), signature: ($win_sig | rtrimstr("\n"))},
-              "linux-x86_64-deb": {url: ($base + "/" + $deb), signature: ($deb_sig | rtrimstr("\n"))},
-              "linux-x86_64-rpm": {url: ($base + "/" + $rpm), signature: ($rpm_sig | rtrimstr("\n"))}
-            }}' > latest.json
+          for i in "${!desktop[@]}"; do
+            asset="${desktop[$i]}"
+            jq --arg key "${keys[$i]}" --arg url "$base/$(basename "$asset")" \
+              --rawfile sig "$asset.sig" \
+              '.platforms[$key] = {url: $url, signature: ($sig | rtrimstr("\n"))}' \
+              latest.json > next.json
+            mv next.json latest.json
+          done
 
           if [[ -z "$release_status" ]]; then
             previous_tag="$(git describe --first-parent --tags --match 'custom-*' --exclude "$tag" --abbrev=0 "$SOURCE_SHA" 2>/dev/null || true)"
             {
-              printf '%s\n' 'Includes desktop and Server packages for Windows x64 and Linux x64.'
+              printf '%s\n' 'Windows x64 desktop and server packages are published first. Linux x64 packages are added after the Linux build succeeds.'
               if [[ -n "$previous_tag" ]]; then
                 printf '\n## Changes since %s\n\n' "$previous_tag"
                 git log --first-parent --format='- %s (%h)' "${previous_tag}..${SOURCE_SHA}"
@@ -247,4 +262,16 @@ jobs:
               --draft
           fi
           gh release upload "$tag" --clobber "${assets[@]}" "${assets[@]/%/.sig}" latest.json
-          gh release edit "$tag" --draft=false --prerelease=false --latest
+          if [[ "$PLATFORM" == windows-x64 ]]; then
+            gh release edit "$tag" --draft=false --prerelease=false --latest
+          fi
+
+  publish_linux:
+    name: Add Linux packages
+    needs: [build_linux, publish_windows]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      PLATFORM: linux-x64
+    steps: *publish_steps

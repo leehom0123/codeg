@@ -12,7 +12,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { openUrl } from "@/lib/platform"
-import { describeAppUpdateError, usesTauriUpdater } from "@/lib/updater"
+import {
+  describeAppUpdateError,
+  UPDATE_RELEASE_URL,
+  usesTauriUpdater,
+} from "@/lib/updater"
 import { cn } from "@/lib/utils"
 
 // The markdown stack is a settings-side dependency; keep it out of the
@@ -24,8 +28,6 @@ const ReleaseNotes = dynamic(
   },
   { ssr: false }
 )
-
-const RELEASES_URL = "https://github.com/spacering-net/codeg/releases/latest"
 
 function Spinner({ className }: { className?: string }) {
   return (
@@ -397,7 +399,10 @@ export function StatusBarUpdate() {
                 {t("upgradeTo", { version: available!.version })}
               </Button>
             ) : (
-              <Button size="sm" onClick={() => void openUrl(RELEASES_URL)}>
+              <Button
+                size="sm"
+                onClick={() => void openUrl(UPDATE_RELEASE_URL)}
+              >
                 <ArrowUpCircle className="h-3.5 w-3.5" />
                 {t("viewRelease", { version: available!.version })}
               </Button>

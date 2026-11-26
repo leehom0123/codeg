@@ -1,3 +1,4 @@
+import tauriConfig from "../../../src-tauri/tauri.conf.json"
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -200,7 +201,7 @@ describe("StatusBarUpdate — popover", () => {
     })
     fireEvent.click(link)
     expect(openUrl).toHaveBeenCalledWith(
-      "https://github.com/spacering-net/codeg/releases/latest"
+      new URL("../", tauriConfig.plugins.updater.endpoints[0]).href.slice(0, -1)
     )
     expect(startUpdate).not.toHaveBeenCalled()
   })

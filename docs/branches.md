@@ -2,7 +2,7 @@
 
 开发、同步及发版流程见 [AGENTS.md](../AGENTS.md#分支与发布)。
 
-状态截至 2026-11-26。custom 已同步上游 main 的 `b47651700`。"自有提交"指不属于上游 main 的提交数。
+状态截至 2026-11-26。custom 已同步上游 main 的 `715016313`。"自有提交"指不属于上游 main 的提交数。
 
 ### 已合入 release/custom
 
@@ -13,7 +13,7 @@
 | feat/live-output-auto-reload | 输出文件实时自动重载 | [#775](https://github.com/spacering-net/codeg/pull/775) open | 0.48.5 适配上游活动栏 |
 | fix/sidebar-subsession-disclosure | 子会话折叠箭头配色修复 | [#1122](https://github.com/spacering-net/codeg/pull/1122) open | 已合入 custom；上游 PR 仍开着 |
 | feat/aux-collapsed-tab-rail | 辅助面板折叠 tab 栏 | [#1258](https://github.com/spacering-net/codeg/pull/1258) open | 已合入共享侧栏按钮更新 |
-| feat/project-knowledge | 共享项目笔记与计划 | [#1299](https://github.com/spacering-net/codeg/pull/1299) open | 0.48.5 合入笔记 Markdown、计划与看板任务关联及 MCP 指引 |
+| feat/project-knowledge | 共享项目笔记与计划 | [#1299](https://github.com/spacering-net/codeg/pull/1299) open | 0.48.5 合入笔记 Markdown、计划与看板任务关联及 MCP 指引。后续合入最后更新时间显示 |
 | feat/session-messaging | 独立会话创建、通信、自动关联、运行时选项 | [#1207](https://github.com/spacering-net/codeg/pull/1207) open | 已合入，默认开启通信，并更新协作与 steer 说明 |
 | feat/session-history | 分页和关键词查询历史 | [#1313](https://github.com/spacering-net/codeg/pull/1313) 草稿 | 已合入分页查询和会话恢复说明 |
 | feat/delegation-delivery-core | 委派结果持久回投和持续上报 | [#1302](https://github.com/spacering-net/codeg/pull/1302) 草稿 | 已合入，依赖 #1207 |

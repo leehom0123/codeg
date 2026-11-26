@@ -261,6 +261,13 @@ jobs:
               --notes-file release-notes.md \
               --draft
           fi
+          # The updater dialog shows the manifest's `notes`; the Linux pass
+          # re-reads this file, so injecting once here covers both platforms.
+          if [[ -f release-notes.md ]]; then
+            jq --rawfile notes release-notes.md \
+              '. + {notes: ($notes | rtrimstr("\n"))}' latest.json > next.json
+            mv next.json latest.json
+          fi
           gh release upload "$tag" --clobber "${assets[@]}" "${assets[@]/%/.sig}" latest.json
           if [[ "$PLATFORM" == windows-x64 ]]; then
             gh release edit "$tag" --draft=false --prerelease=false --latest

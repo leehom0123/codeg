@@ -260,6 +260,8 @@ jobs:
             gh release create "$tag" --target "$SOURCE_SHA" --title "Codeg custom ${build_id}" \
               --notes-file release-notes.md \
               --draft
+          elif [[ "$PLATFORM" == windows-x64 ]]; then
+            gh release view "$tag" --json body --jq .body > release-notes.md
           fi
           # The updater dialog shows the manifest's `notes`; the Linux pass
           # re-reads this file, so injecting once here covers both platforms.

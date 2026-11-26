@@ -1,6 +1,13 @@
+import tauriConfig from "../../src-tauri/tauri.conf.json"
 import { extractAppCommandError, toErrorMessage } from "./app-error"
 import { getTransport, isDesktop, isRemoteDesktopMode } from "./transport"
 import type { AppCommandError } from "./types"
+
+export const UPDATE_RELEASE_URL =
+  tauriConfig.plugins.updater.endpoints[0].replace(
+    /\/download\/latest\.json$/,
+    ""
+  )
 
 // Drive the LOCAL Tauri app updater only for a genuine local desktop window.
 // A remote-desktop window IS a Tauri app (`isDesktop()` is true) but its

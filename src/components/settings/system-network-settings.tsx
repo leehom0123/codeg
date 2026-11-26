@@ -55,7 +55,11 @@ import {
 import { isLocalDesktop, openUrl } from "@/lib/platform"
 import type { AppLocale } from "@/lib/types"
 import { readLastCheck } from "@/lib/update-check-storage"
-import { describeAppUpdateError, usesTauriUpdater } from "@/lib/updater"
+import {
+  describeAppUpdateError,
+  UPDATE_RELEASE_URL,
+  usesTauriUpdater,
+} from "@/lib/updater"
 import { useAppUpdate } from "@/components/providers/update-provider"
 import { APP_LOCALES } from "@/lib/i18n"
 import { toErrorMessage } from "@/lib/app-error"
@@ -537,14 +541,7 @@ export function SystemNetworkSettings() {
                     {t("upgradeTo", { version: availableUpdate.version })}
                   </Button>
                 ) : (
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      openUrl(
-                        "https://github.com/spacering-net/codeg/releases/latest"
-                      )
-                    }
-                  >
+                  <Button size="sm" onClick={() => openUrl(UPDATE_RELEASE_URL)}>
                     <ArrowUpCircle className="h-3.5 w-3.5" />
                     {t("viewRelease", { version: availableUpdate.version })}
                   </Button>

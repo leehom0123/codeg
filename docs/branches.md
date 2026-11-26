@@ -38,7 +38,7 @@ git push fork release/custom
 
 ## 分支清单
 
-状态截至 2026-11-25。custom 已同步上游 main 的 `47d9f770f`。"自有提交"指不属于上游 main 的提交数。
+状态截至 2026-11-26。custom 已同步上游 main 的 `d137140b7`。"自有提交"指不属于上游 main 的提交数。
 
 ### 已合入 release/custom
 
@@ -49,11 +49,11 @@ git push fork release/custom
 | feat/live-output-auto-reload | 输出文件实时自动重载 | [#775](https://github.com/spacering-net/codeg/pull/775) open | 已合入 |
 | fix/sidebar-subsession-disclosure | 子会话折叠箭头配色修复 | [#1122](https://github.com/spacering-net/codeg/pull/1122) open | 已合入 custom；上游 PR 仍开着 |
 | feat/aux-collapsed-tab-rail | 辅助面板折叠 tab 栏 | [#1258](https://github.com/spacering-net/codeg/pull/1258) open | 已合入共享侧栏按钮更新 |
-| feat/project-knowledge | 共享项目笔记与计划 | [#1299](https://github.com/spacering-net/codeg/pull/1299) open | 已合入，知识页签共用侧栏按钮 |
-| feat/session-messaging | 独立会话创建、通信、自动关联、运行时选项 | [#1207](https://github.com/spacering-net/codeg/pull/1207) open | 已合入，默认开启通信，复用 ACP 投递回执 |
-| feat/session-history | 分页和关键词查询历史 | [#1313](https://github.com/spacering-net/codeg/pull/1313) 草稿 | 独立交付，已合入 |
+| feat/project-knowledge | 共享项目笔记与计划 | [#1299](https://github.com/spacering-net/codeg/pull/1299) open | 已合入标题、附件引用和主动记录说明 |
+| feat/session-messaging | 独立会话创建、通信、自动关联、运行时选项 | [#1207](https://github.com/spacering-net/codeg/pull/1207) open | 已合入，默认开启通信，并更新协作与 steer 说明 |
+| feat/session-history | 分页和关键词查询历史 | [#1313](https://github.com/spacering-net/codeg/pull/1313) 草稿 | 已合入分页查询和会话恢复说明 |
 | feat/delegation-delivery-core | 委派结果持久回投和持续上报 | [#1302](https://github.com/spacering-net/codeg/pull/1302) 草稿 | 已合入，依赖 #1207 |
-| feat/session-progress-stacked | 会话 Brief、Digest 和手动协作关系管理 | [#1303](https://github.com/spacering-net/codeg/pull/1303) 草稿 | 已合入，依赖 #1302 |
+| feat/session-progress-stacked | 会话 Brief、Digest 和手动协作关系管理 | [#1303](https://github.com/spacering-net/codeg/pull/1303) 草稿 | 已合入 Brief 和 Digest 的主动更新说明，依赖 #1302 |
 | feat/delegation-model-options | 委派时指定模型和推理档位 | [#1304](https://github.com/spacering-net/codeg/pull/1304) 草稿 | 已合入，依赖 #1302，复用 list_agent_options 与 ACP 启动配置 |
 | fix/personal-agent-aux-path | Windows 兼容的个人助理侧栏目录 | 无 | 已合入，目录统一为上游的 `aux-parts` |
 

@@ -75,13 +75,15 @@ function die(msg) {
 }
 
 function parseArgs(argv) {
-  const args = { target: null }
+  const args = { target: null, withServer: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--target" && argv[i + 1]) {
       args.target = argv[++i]
     } else if (a.startsWith("--target=")) {
       args.target = a.slice("--target=".length)
+    } else if (a === "--with-server") {
+      args.withServer = true
     }
   }
   return args
@@ -168,15 +170,18 @@ function main() {
     return
   }
 
-  const { target: cliTarget } = parseArgs(process.argv.slice(2))
+  const { target: cliTarget, withServer } = parseArgs(process.argv.slice(2))
   const target =
     cliTarget || process.env.TAURI_TARGET_TRIPLE || resolveHostTriple()
   const isWindows = target.includes("windows")
   const ext = isWindows ? ".exe" : ""
 
+  const bins = withServer ? [...BIN_NAMES, "codeg-server"] : BIN_NAMES
+  const features = withServer ? FEATURES + ",server-bin" : FEATURES
+
   log(`target triple: ${target}`)
   log(
-    `building ${BIN_NAMES.join(", ")} (--release --no-default-features --features ${FEATURES})`
+    `building ${bins.join(", ")} (--release --no-default-features --features ${features})`
   )
 
   // cargo build needs to run from src-tauri so it resolves the local manifest
@@ -191,10 +196,11 @@ function main() {
     [
       "build",
       "--release",
-      ...BIN_NAMES.flatMap((name) => ["--bin", name]),
+      ...(withServer ? ["--locked"] : []),
+      ...bins.flatMap((name) => ["--bin", name]),
       "--no-default-features",
       "--features",
-      FEATURES,
+      features,
       "--target",
       target,
     ],

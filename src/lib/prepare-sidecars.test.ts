@@ -33,6 +33,7 @@ function prepare({
   shared = false,
   target = "x86_64-unknown-linux-gnu",
   metadata = "valid",
+  withServer = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "codeg-sidecar-output-"))
   roots.push(root)
@@ -77,7 +78,14 @@ syncBuiltinESMExports()
   )
   const result = spawnSync(
     process.execPath,
-    ["--import", pathToFileURL(preload).href, entry, "--target", target],
+    [
+      "--import",
+      pathToFileURL(preload).href,
+      entry,
+      "--target",
+      target,
+      ...(withServer ? ["--with-server"] : []),
+    ],
     {
       cwd: root,
       env: {
@@ -118,6 +126,23 @@ describe("sidecar Cargo output staging", () => {
         readFileSync(join(crate, "binaries", `${bin}-${target}.exe`), "utf8")
       ).toBe(`built:${bin}`)
     }
+  })
+
+  it("builds the server and sidecars in the same locked Cargo invocation", () => {
+    const { result, commands, crate, target } = prepare({ withServer: true })
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    const calls = readFileSync(commands, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+    const builds = calls.filter((args) => args[0] === "build")
+    expect(builds).toHaveLength(1)
+    expect(builds[0]).toEqual(
+      expect.arrayContaining(["--locked", "codeg-server", ...bins])
+    )
+    expect(
+      readFileSync(join(crate, "binaries", `codeg-mcp-${target}`), "utf8")
+    ).toBe("built:codeg-mcp")
   })
 
   it.each(["missing", "relative"])(

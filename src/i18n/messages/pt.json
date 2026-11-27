@@ -4476,8 +4476,7 @@
         "retryUnavailable": "Nenhuma mensagem anterior para reenviar.",
         "toggleDetails": "Alternar detalhes",
         "dismiss": "Dispensar",
-        "moreIncidents": "+{count} mais",
-        "openStripTitle": "Abrir"
+        "moreIncidents": "+{count} mais"
       },
       "backgroundTasks": {
         "settledFallback": "Tarefa em segundo plano concluída ({status})",
@@ -4524,11 +4523,6 @@
       "proposedPlan": {
         "title": "Plano proposto",
         "planning": "A planear…"
-      },
-      "btw": {
-        "stripAnswering": "respondendo…",
-        "stripAnswered": "respondido",
-        "stripStopped": "Interrompido"
       }
     },
     "diffPreview": {

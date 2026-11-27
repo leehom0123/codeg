@@ -4476,8 +4476,7 @@
         "retryUnavailable": "لا توجد رسالة سابقة لإعادة إرسالها.",
         "toggleDetails": "تبديل التفاصيل",
         "dismiss": "تجاهل",
-        "moreIncidents": "+{count} أخرى",
-        "openStripTitle": "فتح"
+        "moreIncidents": "+{count} أخرى"
       },
       "backgroundTasks": {
         "settledFallback": "انتهت مهمة الخلفية ({status})",
@@ -4524,11 +4523,6 @@
       "proposedPlan": {
         "title": "الخطة المقترحة",
         "planning": "جارٍ التخطيط…"
-      },
-      "btw": {
-        "stripAnswering": "جارٍ الرد…",
-        "stripAnswered": "تم الرد",
-        "stripStopped": "متوقف"
       }
     },
     "diffPreview": {

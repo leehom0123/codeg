@@ -2,7 +2,7 @@
 
 开发、同步及发版流程见 [AGENTS.md](../AGENTS.md#分支与发布)。
 
-状态截至 2026-11-26。custom 已同步上游 main 的 `715016313`。"自有提交"指不属于上游 main 的提交数。
+状态截至 2026-11-27。custom 已同步上游 main 的 `1c175f149`。"自有提交"指不属于上游 main 的提交数。
 
 ### 已合入 release/custom
 
@@ -14,12 +14,14 @@
 | fix/sidebar-subsession-disclosure | 子会话折叠箭头配色修复 | [#1122](https://github.com/spacering-net/codeg/pull/1122) open | 已合入 custom；上游 PR 仍开着 |
 | feat/aux-collapsed-tab-rail | 辅助面板折叠 tab 栏 | [#1258](https://github.com/spacering-net/codeg/pull/1258) open | 已合入共享侧栏按钮更新 |
 | feat/project-knowledge | 共享项目笔记与计划 | [#1299](https://github.com/spacering-net/codeg/pull/1299) open | 0.48.5 合入笔记 Markdown、计划与看板任务关联及 MCP 指引。后续合入最后更新时间显示 |
-| feat/session-messaging | 独立会话创建、通信、自动关联、运行时选项 | [#1207](https://github.com/spacering-net/codeg/pull/1207) open | 已合入，默认开启通信，并更新协作与 steer 说明 |
+| feat/session-messaging | 独立会话创建、通信、自动关联、运行时选项 | [#1207](https://github.com/spacering-net/codeg/pull/1207) open | 已合入，0.49.1 加入自动回信提示和重复读取保护 |
 | feat/session-history | 分页和关键词查询历史 | [#1313](https://github.com/spacering-net/codeg/pull/1313) 草稿 | 已合入分页查询和会话恢复说明 |
 | feat/delegation-delivery-core | 委派结果持久回投和持续上报 | [#1302](https://github.com/spacering-net/codeg/pull/1302) 草稿 | 已合入，依赖 #1207 |
 | feat/session-progress-stacked | 会话 Brief、Digest 和手动协作关系管理 | [#1303](https://github.com/spacering-net/codeg/pull/1303) 草稿 | 0.48.5 合入可折叠进度、Brief Markdown 和长程任务指引，依赖 #1302 |
 | feat/delegation-model-options | 委派时指定模型和推理档位 | [#1304](https://github.com/spacering-net/codeg/pull/1304) 草稿 | 已合入，依赖 #1302，复用 list_agent_options 与 ACP 启动配置 |
 | fix/personal-agent-aux-path | Windows 兼容的个人助理侧栏目录 | 无 | 已合入，目录统一为上游的 `aux-parts` |
+
+| fix/update-release-link | 更新界面打开配置对应的发布页 | 无 | 已合入，随 0.49.1 出包 |
 
 ### 未合入 release/custom
 

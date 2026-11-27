@@ -170,11 +170,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps: *build_steps
 
-  build_macos:
+  build_macos_arm64:
     name: Server and Desktop ${{ matrix.platform }}
     needs: web
     strategy:
-      fail-fast: false
       matrix:
         include:
           - runner: macos-15
@@ -182,6 +181,15 @@ jobs:
             suffix: ""
             target: aarch64-apple-darwin
             bundles: dmg
+    runs-on: ${{ matrix.runner }}
+    steps: *build_steps
+
+  build_macos_intel:
+    name: Server and Desktop ${{ matrix.platform }}
+    needs: web
+    strategy:
+      matrix:
+        include:
           - runner: macos-15-intel
             platform: darwin-x64
             suffix: ""
@@ -315,16 +323,22 @@ jobs:
       PLATFORM: linux-x64
     steps: *publish_steps
 
-  publish_macos:
-    name: Add macOS packages (${{ matrix.platform }})
-    needs: [build_macos, publish_windows]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [darwin-arm64, darwin-x64]
+  publish_macos_arm64:
+    name: Add macOS Apple silicon packages
+    needs: [build_macos_arm64, publish_windows]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     env:
-      PLATFORM: ${{ matrix.platform }}
+      PLATFORM: darwin-arm64
+    steps: *publish_steps
+
+  publish_macos_intel:
+    name: Add macOS Intel packages
+    needs: [build_macos_intel, publish_windows]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      PLATFORM: darwin-x64
     steps: *publish_steps

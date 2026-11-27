@@ -311,6 +311,7 @@ impl CompanionFeatures {
             | "dispatch_followup"
             | "dispatch_answer"
             | "dispatch_wait"
+            | "dispatch_stop"
             | "item_list"
             | "item_read"
             | "item_update"
@@ -1433,6 +1434,10 @@ async fn build_tools_call_spawn(
                 token: ctx.token.clone(),
                 session_id,
                 max_messages: Some(max_messages),
+                refresh: arguments
+                    .get("refresh")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
             };
             // No external_handle: a read-only lookup has nothing to cancel
             // broker-side — canceling only suppresses the response.
@@ -1894,6 +1899,7 @@ async fn build_tools_call_spawn(
         | "dispatch_followup"
         | "dispatch_answer"
         | "dispatch_wait"
+        | "dispatch_stop"
         | "item_list"
         | "item_read"
         | "item_update"
@@ -6557,12 +6563,13 @@ mod tests {
         computer_clipboard: false,
     };
 
-    const PERSONAL_AGENT_TOOLS: [&str; 34] = [
+    const PERSONAL_AGENT_TOOLS: [&str; 35] = [
         "project_list",
         "dispatch",
         "dispatch_followup",
         "dispatch_answer",
         "dispatch_wait",
+        "dispatch_stop",
         "item_list",
         "item_read",
         "item_update",
